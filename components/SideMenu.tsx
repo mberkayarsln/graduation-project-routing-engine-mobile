@@ -1,10 +1,10 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, Animated, Dimensions, Image, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const MENU_WIDTH = SCREEN_WIDTH * 0.78;
+const MENU_WIDTH = SCREEN_WIDTH * 0.68;
 
 interface MenuItem {
     icon: string;
@@ -24,9 +24,11 @@ interface SideMenuProps {
 export default function SideMenu({ visible, onClose, items, userName, userEmail }: SideMenuProps) {
     const slideAnim = useRef(new Animated.Value(-MENU_WIDTH)).current;
     const backdropAnim = useRef(new Animated.Value(0)).current;
+    const [mounted, setMounted] = useState(false);
 
     useEffect(() => {
         if (visible) {
+            setMounted(true);
             Animated.parallel([
                 Animated.spring(slideAnim, {
                     toValue: 0,
@@ -40,23 +42,23 @@ export default function SideMenu({ visible, onClose, items, userName, userEmail 
                     useNativeDriver: true,
                 }),
             ]).start();
-        } else {
+        } else if (mounted) {
             Animated.parallel([
                 Animated.timing(slideAnim, {
                     toValue: -MENU_WIDTH,
-                    duration: 200,
+                    duration: 250,
                     useNativeDriver: true,
                 }),
                 Animated.timing(backdropAnim, {
                     toValue: 0,
-                    duration: 200,
+                    duration: 250,
                     useNativeDriver: true,
                 }),
-            ]).start();
+            ]).start(() => setMounted(false));
         }
     }, [visible]);
 
-    if (!visible) return null;
+    if (!mounted) return null;
 
     return (
         <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 }}>

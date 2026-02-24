@@ -229,8 +229,9 @@ export default function EmployeeLiveTracking() {
 
     // Dynamic ETA based on shuttle progress
     const progress = routeCoordinates.length > 1 ? shuttleIndex / (routeCoordinates.length - 1) : 0;
+    const arrived = progress >= 1;
     const remainingFraction = 1 - progress;
-    const distanceKm = (route.distance_km * remainingFraction).toFixed(1);
+    const distanceKm = (Number(route.distance_km) * remainingFraction).toFixed(1);
     const minutesAway = Math.max(1, Math.round(route.duration_min * remainingFraction));
 
     const driverName = vehicle?.driver_name || 'Driver';
@@ -454,27 +455,47 @@ export default function EmployeeLiveTracking() {
                     }
                 >
                     {/* Status */}
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1 }}>
-                        Status
-                    </Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 12 }}>
-                        <Text style={{ fontSize: 26, fontWeight: '700', color: Colors.text }}>
-                            Arriving in {minutesAway} min
-                        </Text>
-                        <View
-                            style={{
-                                backgroundColor: Colors.primaryLight,
-                                paddingHorizontal: 10,
-                                paddingVertical: 4,
-                                borderRadius: 8,
-                                marginLeft: 12,
-                            }}
-                        >
-                            <Text style={{ fontSize: 13, fontWeight: '600', color: Colors.primary }}>
-                                {distanceKm} km away
+                    {arrived ? (
+                        <View style={{ alignItems: 'center', paddingVertical: 16, marginBottom: 12 }}>
+                            <View style={{
+                                width: 56, height: 56, borderRadius: 28,
+                                backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center',
+                                marginBottom: 12,
+                            }}>
+                                <Ionicons name="checkmark" size={32} color={Colors.white} />
+                            </View>
+                            <Text style={{ fontSize: 24, fontWeight: '700', color: Colors.primary }}>
+                                Shuttle Arrived!
+                            </Text>
+                            <Text style={{ fontSize: 14, color: Colors.textSecondary, marginTop: 4 }}>
+                                Your shuttle has reached its destination
                             </Text>
                         </View>
-                    </View>
+                    ) : (
+                        <>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1 }}>
+                                Status
+                            </Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 12 }}>
+                                <Text style={{ fontSize: 26, fontWeight: '700', color: Colors.text }}>
+                                    Arriving in {minutesAway} min
+                                </Text>
+                                <View
+                                    style={{
+                                        backgroundColor: Colors.primaryLight,
+                                        paddingHorizontal: 10,
+                                        paddingVertical: 4,
+                                        borderRadius: 8,
+                                        marginLeft: 12,
+                                    }}
+                                >
+                                    <Text style={{ fontSize: 13, fontWeight: '600', color: Colors.primary }}>
+                                        {distanceKm} km away
+                                    </Text>
+                                </View>
+                            </View>
+                        </>
+                    )}
 
                     {/* Walking info */}
                     {walkingDistance !== null && (
