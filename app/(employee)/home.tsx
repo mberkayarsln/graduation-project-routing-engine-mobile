@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, SafeAreaView, Dimensions, TouchableOpacity, Animated, PanResponder, ScrollView, RefreshControl } from 'react-native';
+import { View, Text, SafeAreaView, Dimensions, TouchableOpacity, Animated, PanResponder, ScrollView, RefreshControl, Image } from 'react-native';
 import { useRouter } from 'expo-router';
-import MapView, { Marker } from 'react-native-maps';
+import MapView, { Marker, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import Button from '@/components/Button';
+import SideMenu from '@/components/SideMenu';
 import { api } from '@/services/api';
-import { Route } from '@/services/types';
+import { Route, Vehicle, StopNamesMap } from '@/services/types';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.55;
@@ -20,14 +21,21 @@ const ISTANBUL_REGION = {
     longitudeDelta: 0.03,
 };
 
-export default function EmployeeRequestShuttle() {
+export default function EmployeeHome() {
     const router = useRouter();
     const [loading, setLoading] = useState(true);
     const [route, setRoute] = useState<Route | null>(null);
+    const [vehicle, setVehicle] = useState<Vehicle | null>(null);
     const [expanded, setExpanded] = useState(true);
     const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+    const [assignedStop, setAssignedStop] = useState<{ latitude: number; longitude: number } | null>(null);
+    const [pickupStopName, setPickupStopName] = useState<string>('');
+    const [walkingDistance, setWalkingDistance] = useState<number | null>(null);
+    const [walkingDuration, setWalkingDuration] = useState<number | null>(null);
     const [refreshing, setRefreshing] = useState(false);
     const [locationInView, setLocationInView] = useState(false);
+    const [employeeName, setEmployeeName] = useState('');
+    const [menuVisible, setMenuVisible] = useState(false);
 
     const sheetHeight = useRef(new Animated.Value(SHEET_MAX_HEIGHT)).current;
     const lastHeight = useRef(SHEET_MAX_HEIGHT);
@@ -73,21 +81,17 @@ export default function EmployeeRequestShuttle() {
         loadData();
     }, []);
 
-    /**
-     * TESTING ONLY: Uses the first employee's coordinates as the user's location
-     * and fetches the route matching that employee's cluster_id.
-     * For production, replace employee location with real GPS.
-     */
     async function loadData() {
         try {
-            const [employees, routes] = await Promise.all([
+            const [employees, routes, vehicles] = await Promise.all([
                 api.getEmployees(),
                 api.getRoutes(),
+                api.getVehicles(),
             ]);
 
-            // Use first employee with a cluster as the mock user
             const emp = employees.find(e => e.cluster_id !== null) || employees[0];
             if (emp) {
+                setEmployeeName(emp.name);
                 const coords = {
                     latitude: emp.lat,
                     longitude: emp.lon,
@@ -99,16 +103,46 @@ export default function EmployeeRequestShuttle() {
                     longitudeDelta: 0.03,
                 }, 1000);
 
-                // Find the route matching this employee's cluster
+                // Set assigned stop
+                if (emp.pickup_point) {
+                    setAssignedStop({
+                        latitude: emp.pickup_point[0],
+                        longitude: emp.pickup_point[1],
+                    });
+                }
+
                 const matchingRoute = routes.find(r => r.cluster_id === emp.cluster_id);
                 if (matchingRoute) {
                     setRoute(matchingRoute);
                 } else if (routes.length > 0) {
                     setRoute(routes[0]);
                 }
+
+                // Fetch pickup stop name
+                if (emp.pickup_point) {
+                    try {
+                        const names = await api.getStopNames([[emp.pickup_point[0], emp.pickup_point[1]]]);
+                        const key = `${emp.pickup_point[0].toFixed(5)},${emp.pickup_point[1].toFixed(5)}`;
+                        setPickupStopName(names[key] || 'Bus Stop');
+                    } catch { }
+                }
+
+                // Fetch walking route info
+                if (emp.pickup_point) {
+                    try {
+                        const walkData = await api.getWalkingRoute(
+                            emp.lat, emp.lon,
+                            emp.pickup_point[0], emp.pickup_point[1]
+                        );
+                        setWalkingDistance(Math.round(walkData.distance_km * 1000));
+                        setWalkingDuration(Math.round(walkData.duration_min));
+                    } catch { }
+                }
             } else if (routes.length > 0) {
                 setRoute(routes[0]);
             }
+
+            if (vehicles.length > 0) setVehicle(vehicles[0]);
         } catch (err) {
             console.error('Failed to load data:', err);
         } finally {
@@ -136,21 +170,9 @@ export default function EmployeeRequestShuttle() {
         }
     }
 
-    const mapRegion = userLocation
-        ? {
-            latitude: userLocation.latitude,
-            longitude: userLocation.longitude,
-            latitudeDelta: 0.03,
-            longitudeDelta: 0.03,
-        }
-        : route
-            ? {
-                latitude: route.center[0],
-                longitude: route.center[1],
-                latitudeDelta: 0.04,
-                longitudeDelta: 0.04,
-            }
-            : ISTANBUL_REGION;
+    // Greeting based on time of day
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
 
     return (
         <View style={{ flex: 1 }}>
@@ -164,10 +186,7 @@ export default function EmployeeRequestShuttle() {
                 onPanDrag={() => setLocationInView(false)}
             >
                 {userLocation && (
-                    <Marker
-                        coordinate={userLocation}
-                        title="You are here"
-                    >
+                    <Marker coordinate={userLocation} title="You are here">
                         <View style={{
                             width: 20,
                             height: 20,
@@ -178,12 +197,38 @@ export default function EmployeeRequestShuttle() {
                         }} />
                     </Marker>
                 )}
+                {assignedStop && (
+                    <Marker coordinate={assignedStop} title={pickupStopName || 'Your Pickup Stop'}>
+                        <View style={{
+                            width: 22,
+                            height: 22,
+                            borderRadius: 11,
+                            backgroundColor: Colors.primary,
+                            borderWidth: 2,
+                            borderColor: Colors.white,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}>
+                            <Ionicons name="flag" size={12} color={Colors.white} />
+                        </View>
+                    </Marker>
+                )}
+                {/* Walking path line */}
+                {userLocation && assignedStop && (
+                    <Polyline
+                        coordinates={[userLocation, assignedStop]}
+                        strokeColor="#4A90D9"
+                        strokeWidth={2}
+                        lineDashPattern={[4, 6]}
+                    />
+                )}
             </MapView>
 
             {/* Header Overlay */}
             <SafeAreaView style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 8 }}>
                     <TouchableOpacity
+                        onPress={() => setMenuVisible(true)}
                         style={{
                             width: 40,
                             height: 40,
@@ -279,85 +324,169 @@ export default function EmployeeRequestShuttle() {
                         />
                     }
                 >
-                    {/* Title */}
+                    {/* Greeting */}
                     <Text style={{ fontSize: 22, fontWeight: '700', color: Colors.text }}>
-                        Request Shuttle
+                        {greeting}{employeeName ? `, ${employeeName.split(' ')[0]}` : ''} 👋
                     </Text>
-                    <Text style={{ fontSize: 14, color: Colors.textSecondary, marginTop: 4, marginBottom: 24 }}>
-                        {loading ? 'Loading routes...' : route ? route.employee_count + ' employees on this route' : 'Available shuttles nearby'}
+                    <Text style={{ fontSize: 14, color: Colors.textSecondary, marginTop: 4, marginBottom: 20 }}>
+                        {loading ? 'Loading your shuttle info...' : route ? 'Your shuttle is ready' : 'No shuttle assigned yet'}
                     </Text>
 
-                    {/* Pickup Location */}
-                    <TouchableOpacity
-                        style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            paddingVertical: 16,
-                            paddingHorizontal: 16,
-                            backgroundColor: Colors.background,
-                            borderRadius: 12,
-                            marginBottom: 12,
-                        }}
-                    >
-                        <View
-                            style={{
-                                width: 12,
-                                height: 12,
-                                borderRadius: 6,
-                                backgroundColor: Colors.primary,
-                                marginRight: 14,
-                            }}
-                        />
-                        <Text style={{ fontSize: 16, color: Colors.text, fontWeight: '500' }}>
-                            Headquarters - HQ
-                        </Text>
-                    </TouchableOpacity>
+                    {/* Pickup Stop Card */}
+                    {pickupStopName ? (
+                        <View style={{
+                            backgroundColor: Colors.primaryLight,
+                            borderRadius: 14,
+                            padding: 16,
+                            marginBottom: 14,
+                        }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                                <View style={{
+                                    width: 32,
+                                    height: 32,
+                                    borderRadius: 16,
+                                    backgroundColor: Colors.primary,
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    marginRight: 12,
+                                }}>
+                                    <Ionicons name="flag" size={16} color={Colors.white} />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={{ fontSize: 12, color: Colors.primary, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                                        Your Pickup Stop
+                                    </Text>
+                                    <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.text, marginTop: 2 }}>
+                                        {pickupStopName}
+                                    </Text>
+                                </View>
+                            </View>
+                            {walkingDistance !== null && (
+                                <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(76,175,80,0.2)' }}>
+                                    <Ionicons name="walk" size={18} color={Colors.primary} />
+                                    <Text style={{ fontSize: 14, color: Colors.primary, fontWeight: '600', marginLeft: 8 }}>
+                                        {walkingDistance}m · {walkingDuration} min walk
+                                    </Text>
+                                </View>
+                            )}
+                        </View>
+                    ) : null}
 
-                    {/* Destination */}
-                    <TouchableOpacity
-                        style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            paddingVertical: 16,
-                            paddingHorizontal: 16,
+                    {/* Route Info Card */}
+                    {route && (
+                        <View style={{
                             backgroundColor: Colors.background,
-                            borderRadius: 12,
-                            marginBottom: 12,
-                        }}
-                    >
-                        <Ionicons name="location" size={16} color={Colors.textMuted} style={{ marginRight: 12 }} />
-                        <Text style={{ fontSize: 16, color: Colors.textMuted }}>
-                            Where to?
-                        </Text>
-                    </TouchableOpacity>
+                            borderRadius: 14,
+                            padding: 16,
+                            marginBottom: 14,
+                        }}>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
+                                Your Route
+                            </Text>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                <View style={{ alignItems: 'center', flex: 1 }}>
+                                    <Ionicons name="people" size={20} color={Colors.primary} />
+                                    <Text style={{ fontSize: 18, fontWeight: '700', color: Colors.text, marginTop: 4 }}>
+                                        {route.employee_count}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: Colors.textSecondary, marginTop: 2 }}>
+                                        Passengers
+                                    </Text>
+                                </View>
+                                <View style={{ width: 1, backgroundColor: Colors.borderLight }} />
+                                <View style={{ alignItems: 'center', flex: 1 }}>
+                                    <Ionicons name="navigate" size={20} color={Colors.primary} />
+                                    <Text style={{ fontSize: 18, fontWeight: '700', color: Colors.text, marginTop: 4 }}>
+                                        {Number(route.distance_km).toFixed(1)}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: Colors.textSecondary, marginTop: 2 }}>
+                                        km Total
+                                    </Text>
+                                </View>
+                                <View style={{ width: 1, backgroundColor: Colors.borderLight }} />
+                                <View style={{ alignItems: 'center', flex: 1 }}>
+                                    <Ionicons name="location" size={20} color={Colors.primary} />
+                                    <Text style={{ fontSize: 18, fontWeight: '700', color: Colors.text, marginTop: 4 }}>
+                                        {(route.bus_stops || route.stops).length}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: Colors.textSecondary, marginTop: 2 }}>
+                                        Stops
+                                    </Text>
+                                </View>
+                                <View style={{ width: 1, backgroundColor: Colors.borderLight }} />
+                                <View style={{ alignItems: 'center', flex: 1 }}>
+                                    <Ionicons name="time" size={20} color={Colors.primary} />
+                                    <Text style={{ fontSize: 18, fontWeight: '700', color: Colors.text, marginTop: 4 }}>
+                                        {Math.round(route.duration_min)}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: Colors.textSecondary, marginTop: 2 }}>
+                                        min ETA
+                                    </Text>
+                                </View>
+                            </View>
+                        </View>
+                    )}
 
-                    {/* Leave Now */}
-                    <TouchableOpacity
-                        style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            paddingVertical: 16,
-                            paddingHorizontal: 16,
+                    {/* Vehicle & Driver Card */}
+                    {vehicle && (
+                        <View style={{
                             backgroundColor: Colors.background,
-                            borderRadius: 12,
-                            marginBottom: 24,
-                        }}
-                    >
-                        <Ionicons name="time-outline" size={18} color={Colors.primary} style={{ marginRight: 12 }} />
-                        <Text style={{ fontSize: 16, color: Colors.text, fontWeight: '500' }}>
-                            Leave Now
-                        </Text>
-                        <Ionicons name="chevron-down" size={18} color={Colors.textMuted} style={{ marginLeft: 'auto' }} />
-                    </TouchableOpacity>
+                            borderRadius: 14,
+                            padding: 16,
+                            marginBottom: 20,
+                        }}>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
+                                Assigned Vehicle
+                            </Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <View style={{
+                                    width: 44,
+                                    height: 44,
+                                    borderRadius: 22,
+                                    backgroundColor: Colors.primaryLight,
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    marginRight: 14,
+                                }}>
+                                    <Ionicons name="bus" size={22} color={Colors.primary} />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.text }}>
+                                        {vehicle.driver_name}
+                                    </Text>
+                                    <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 2 }}>
+                                        {vehicle.vehicle_type} · {vehicle.capacity} seats
+                                    </Text>
+                                </View>
+                            </View>
+                        </View>
+                    )}
 
-                    {/* Request Button */}
+                    {/* Track Shuttle Button */}
                     <Button
-                        title="Request Shuttle"
+                        title="Track My Shuttle"
                         onPress={() => router.push('/(employee)/tracking')}
                         icon="bus-outline"
                     />
                 </ScrollView>
             </Animated.View>
+            {/* Side Menu */}
+            <SideMenu
+                visible={menuVisible}
+                onClose={() => setMenuVisible(false)}
+                userName={employeeName}
+                userEmail={employeeName ? `${employeeName.toLowerCase().replace(/\s+/g, '.')}@company.com` : undefined}
+                items={[
+                    { icon: 'person-outline', label: 'My Profile', onPress: () => router.push('/(employee)/profile') },
+                    { icon: 'time-outline', label: 'Route History', onPress: () => router.push('/(employee)/history'), dividerAfter: true },
+                    { icon: 'calendar-outline', label: 'Schedule & Timetable', onPress: () => router.push('/(employee)/schedule') },
+                    { icon: 'warning-outline', label: 'Report an Issue', onPress: () => router.push('/(employee)/report'), dividerAfter: true },
+                    { icon: 'settings-outline', label: 'Settings', onPress: () => router.push('/(employee)/settings') },
+                    { icon: 'help-circle-outline', label: 'Help & FAQ', onPress: () => router.push('/(employee)/help') },
+                    { icon: 'information-circle-outline', label: 'About', onPress: () => router.push('/(employee)/about'), dividerAfter: true },
+                    { icon: 'log-out-outline', label: 'Logout', onPress: () => router.replace('/') },
+                ]}
+            />
         </View>
     );
 }

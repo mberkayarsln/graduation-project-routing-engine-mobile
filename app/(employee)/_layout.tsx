@@ -61,6 +61,36 @@ export default function EmployeeLayout() {
                     ),
                 }}
             />
+            <Tabs.Screen
+                name="settings"
+                options={{
+                    href: null,
+                }}
+            />
+            <Tabs.Screen
+                name="report"
+                options={{
+                    href: null,
+                }}
+            />
+            <Tabs.Screen
+                name="schedule"
+                options={{
+                    href: null,
+                }}
+            />
+            <Tabs.Screen
+                name="help"
+                options={{
+                    href: null,
+                }}
+            />
+            <Tabs.Screen
+                name="about"
+                options={{
+                    href: null,
+                }}
+            />
         </Tabs>
     );
 }
