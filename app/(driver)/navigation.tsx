@@ -1,44 +1,142 @@
-import React from 'react';
-import { View, Text, SafeAreaView, Dimensions } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, SafeAreaView, Dimensions, ActivityIndicator } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import Button from '@/components/Button';
 import PassengerCard from '@/components/PassengerCard';
-import {
-    mockPassengers,
-    mockNextStop,
-    mockRouteCoordinates,
-    ISTANBUL_REGION,
-} from '@/constants/mockData';
+import { api } from '@/services/api';
+import { Route, ClusterEmployee } from '@/services/types';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function DriverActiveNavigation() {
+    const [loading, setLoading] = useState(true);
+    const [route, setRoute] = useState<Route | null>(null);
+    const [passengers, setPassengers] = useState<ClusterEmployee[]>([]);
+    const [currentStopIndex, setCurrentStopIndex] = useState(0);
+    const [stopNames, setStopNames] = useState<Record<string, string>>({});
+
+    useEffect(() => {
+        loadNavigationData();
+    }, []);
+
+    async function loadNavigationData() {
+        try {
+            setLoading(true);
+            const routes = await api.getRoutes();
+            if (routes.length === 0) return;
+
+            const firstRoute = routes[0];
+            setRoute(firstRoute);
+
+            // Load cluster for passenger data
+            const cluster = await api.getCluster(firstRoute.cluster_id);
+            if (cluster.employees) {
+                setPassengers(cluster.employees);
+            }
+
+            // Resolve stop names
+            if (firstRoute.stops && firstRoute.stops.length > 0) {
+                try {
+                    const names = await api.getStopNames(firstRoute.stops);
+                    setStopNames(names);
+                } catch {
+                    // Optional
+                }
+            }
+        } catch (err) {
+            console.error('Failed to load navigation data:', err);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function getStopName(stop: number[]): string {
+        const key = `${stop[0].toFixed(5)},${stop[1].toFixed(5)}`;
+        return stopNames[key] || 'Next Stop';
+    }
+
+    function handleArrivedAtStop() {
+        if (route && currentStopIndex < route.stops.length - 1) {
+            setCurrentStopIndex(currentStopIndex + 1);
+        }
+    }
+
+    if (loading) {
+        return (
+            <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+                <Text style={{ marginTop: 12, color: Colors.textSecondary }}>Loading navigation...</Text>
+            </SafeAreaView>
+        );
+    }
+
+    if (!route || route.coordinates.length === 0) {
+        return (
+            <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+                <Ionicons name="navigate-circle-outline" size={48} color={Colors.textMuted} />
+                <Text style={{ fontSize: 18, fontWeight: '600', color: Colors.text, marginTop: 16 }}>No Route Data</Text>
+            </SafeAreaView>
+        );
+    }
+
+    // Convert [lat, lon] arrays to {latitude, longitude} objects
+    const routeCoordinates = route.coordinates.map(c => ({
+        latitude: c[0],
+        longitude: c[1],
+    }));
+
+    const stopCoordinates = route.stops.map(s => ({
+        latitude: s[0],
+        longitude: s[1],
+    }));
+
+    const currentStop = route.stops[currentStopIndex];
+    const nextStopName = currentStop ? getStopName(currentStop) : 'End';
+
+    // Estimate arrival time
+    const stopsRemaining = route.stops.length - currentStopIndex;
+    const minutesPerStop = route.stops.length > 1 ? route.duration_min / (route.stops.length - 1) : 0;
+    const minutesAway = Math.round(minutesPerStop);
+
+    const now = new Date();
+    const arrivalDate = new Date(now.getTime() + minutesAway * 60 * 1000);
+    const arrivalTime = `${String(arrivalDate.getHours()).padStart(2, '0')}:${String(arrivalDate.getMinutes()).padStart(2, '0')}`;
+
+    // Center map on current stop
+    const mapRegion = {
+        latitude: currentStop ? currentStop[0] : routeCoordinates[0].latitude,
+        longitude: currentStop ? currentStop[1] : routeCoordinates[0].longitude,
+        latitudeDelta: 0.04,
+        longitudeDelta: 0.04,
+    };
+
     return (
         <View style={{ flex: 1 }}>
             {/* Map */}
             <MapView
                 style={{ width: '100%', height: SCREEN_HEIGHT * 0.45 }}
-                initialRegion={ISTANBUL_REGION}
+                initialRegion={mapRegion}
                 showsUserLocation
                 showsMyLocationButton={false}
             >
                 <Polyline
-                    coordinates={mockRouteCoordinates}
+                    coordinates={routeCoordinates}
                     strokeColor={Colors.primary}
                     strokeWidth={4}
                 />
-                {mockRouteCoordinates.map((coord, index) => (
+                {stopCoordinates.map((coord, index) => (
                     <Marker key={index} coordinate={coord}>
                         <View
                             style={{
-                                width: 16,
-                                height: 16,
-                                borderRadius: 8,
-                                backgroundColor: Colors.white,
+                                width: index === currentStopIndex ? 20 : 16,
+                                height: index === currentStopIndex ? 20 : 16,
+                                borderRadius: index === currentStopIndex ? 10 : 8,
+                                backgroundColor: index === currentStopIndex ? Colors.primary : Colors.white,
                                 borderWidth: 3,
-                                borderColor: Colors.primary,
+                                borderColor: index < currentStopIndex ? Colors.textMuted : Colors.primary,
+                                opacity: index < currentStopIndex ? 0.5 : 1,
                             }}
                         />
                     </Marker>
@@ -66,10 +164,10 @@ export default function DriverActiveNavigation() {
                     Arrival
                 </Text>
                 <Text style={{ fontSize: 22, fontWeight: '700', color: Colors.text }}>
-                    {mockNextStop.arrivalTime}
+                    {arrivalTime}
                 </Text>
                 <Text style={{ fontSize: 13, fontWeight: '600', color: Colors.primary }}>
-                    {mockNextStop.minutesAway} min
+                    {minutesAway} min
                 </Text>
             </View>
 
@@ -106,42 +204,49 @@ export default function DriverActiveNavigation() {
                 <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16 }}>
                     <View>
                         <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.primary, textTransform: 'uppercase', letterSpacing: 1 }}>
-                            Next Stop
+                            {currentStopIndex < route.stops.length - 1 ? 'Next Stop' : 'Final Stop'}
                         </Text>
                         <Text style={{ fontSize: 24, fontWeight: '700', color: Colors.text, marginTop: 4 }}>
-                            {mockNextStop.name}
+                            {nextStopName}
                         </Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
                             <Ionicons name="people" size={16} color={Colors.textSecondary} />
                             <Text style={{ fontSize: 14, color: Colors.textSecondary, marginLeft: 6 }}>
-                                {mockNextStop.passengerCount} Passengers
+                                {passengers.length} Passengers
                             </Text>
                         </View>
                     </View>
                     <View style={{ padding: 8 }}>
-                        <Ionicons name="search-outline" size={22} color={Colors.textSecondary} />
+                        <Text style={{ fontSize: 12, color: Colors.textMuted }}>
+                            {currentStopIndex + 1} / {route.stops.length}
+                        </Text>
                     </View>
                 </View>
 
                 {/* Passenger List */}
                 <View style={{ flex: 1 }}>
-                    {mockPassengers.map((passenger) => (
+                    {passengers.slice(0, 5).map((passenger) => (
                         <PassengerCard
                             key={passenger.id}
                             name={passenger.name}
-                            status={passenger.status}
-                            avatar={passenger.avatar}
+                            status={currentStopIndex > 0 ? 'Boarded' : 'Waiting'}
+                            avatar={`https://i.pravatar.cc/100?u=${passenger.id}`}
                         />
                     ))}
+                    {passengers.length > 5 && (
+                        <Text style={{ fontSize: 13, color: Colors.textMuted, textAlign: 'center', marginTop: 8 }}>
+                            +{passengers.length - 5} more passengers
+                        </Text>
+                    )}
                 </View>
 
                 {/* Arrived Button */}
                 <SafeAreaView>
                     <View style={{ paddingBottom: 8, paddingTop: 12 }}>
                         <Button
-                            title="Arrived at Stop"
-                            onPress={() => { }}
-                            icon="flag-outline"
+                            title={currentStopIndex < route.stops.length - 1 ? 'Arrived at Stop' : 'Trip Complete'}
+                            onPress={handleArrivedAtStop}
+                            icon={currentStopIndex < route.stops.length - 1 ? 'flag-outline' : 'checkmark-circle-outline'}
                         />
                     </View>
                 </SafeAreaView>
