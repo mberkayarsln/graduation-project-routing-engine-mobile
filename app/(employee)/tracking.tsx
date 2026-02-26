@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import Button from '@/components/Button';
 import { api } from '@/services/api';
+import { LocationStore } from '@/services/LocationStore';
 import { Route, Vehicle, StopNamesMap } from '@/services/types';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -26,6 +27,7 @@ export default function EmployeeLiveTracking() {
     const [refreshing, setRefreshing] = useState(false);
     const [shuttleIndex, setShuttleIndex] = useState(0);
     const [locationInView, setLocationInView] = useState(false);
+    const [driverLive, setDriverLive] = useState(false);
 
     const sheetHeight = useRef(new Animated.Value(SHEET_MAX_HEIGHT)).current;
     const lastHeight = useRef(SHEET_MAX_HEIGHT);
@@ -181,13 +183,34 @@ export default function EmployeeLiveTracking() {
     useEffect(() => {
         if (routeCoordinates.length === 0) return;
         const interval = setInterval(() => {
-            setShuttleIndex(prev => {
-                if (prev >= routeCoordinates.length - 1) return prev;
-                return prev + 1;
-            });
+            // Check if the driver is actively sharing location
+            const driverLoc = LocationStore.get();
+            if (driverLoc && LocationStore.isActive()) {
+                // Use real driver position: map stop index to route coordinate index
+                setDriverLive(true);
+                const stopIdx = driverLoc.currentStopIndex;
+                if (route && route.stops[stopIdx]) {
+                    // Find nearest route coordinate to this stop
+                    const stop = route.stops[stopIdx];
+                    let nearestIdx = 0;
+                    let minDist = Infinity;
+                    for (let j = 0; j < routeCoordinates.length; j++) {
+                        const d = Math.abs(routeCoordinates[j].latitude - stop[0]) + Math.abs(routeCoordinates[j].longitude - stop[1]);
+                        if (d < minDist) { minDist = d; nearestIdx = j; }
+                    }
+                    setShuttleIndex(nearestIdx);
+                }
+            } else {
+                // Fall back to simulation
+                setDriverLive(false);
+                setShuttleIndex(prev => {
+                    if (prev >= routeCoordinates.length - 1) return prev;
+                    return prev + 1;
+                });
+            }
         }, 200);
         return () => clearInterval(interval);
-    }, [routeCoordinates.length]);
+    }, [routeCoordinates.length, route]);
 
     if (loading) {
         return (
@@ -289,16 +312,29 @@ export default function EmployeeLiveTracking() {
                     <View style={{ alignItems: 'center' }}>
                         <View
                             style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
                                 backgroundColor: Colors.primary,
                                 paddingHorizontal: 8,
                                 paddingVertical: 4,
                                 borderRadius: 6,
                                 marginBottom: 4,
+                                gap: 4,
                             }}
                         >
                             <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>
                                 {vehiclePlate}
                             </Text>
+                            {driverLive && (
+                                <View style={{
+                                    backgroundColor: '#22C55E',
+                                    paddingHorizontal: 4,
+                                    paddingVertical: 1,
+                                    borderRadius: 3,
+                                }}>
+                                    <Text style={{ color: '#fff', fontSize: 8, fontWeight: '800' }}>LIVE</Text>
+                                </View>
+                            )}
                         </View>
                         <View
                             style={{

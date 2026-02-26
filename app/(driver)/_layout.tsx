@@ -61,6 +61,12 @@ export default function DriverLayout() {
                     ),
                 }}
             />
+            <Tabs.Screen
+                name="trip_summary"
+                options={{
+                    href: null,
+                }}
+            />
         </Tabs>
     );
 }

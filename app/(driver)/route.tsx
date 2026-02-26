@@ -1,9 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, Switch, Platform, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import Button from '@/components/Button';
+import SideMenu from '@/components/SideMenu';
+import { LocationStore } from '@/services/LocationStore';
 import { api } from '@/services/api';
 import { Route, Vehicle } from '@/services/types';
 
@@ -14,6 +17,15 @@ export default function DriverRouteOverview() {
     const [route, setRoute] = useState<Route | null>(null);
     const [vehicle, setVehicle] = useState<Vehicle | null>(null);
     const [stopNames, setStopNames] = useState<Record<string, string>>({});
+    const [menuVisible, setMenuVisible] = useState(false);
+    const [tripActive, setTripActive] = useState(false);
+
+    // Check LocationStore whenever this screen comes into focus
+    useFocusEffect(
+        useCallback(() => {
+            setTripActive(LocationStore.isActive());
+        }, [])
+    );
 
     useEffect(() => {
         loadData();
@@ -109,7 +121,7 @@ export default function DriverRouteOverview() {
                     borderBottomColor: Colors.borderLight,
                 }}
             >
-                <TouchableOpacity>
+                <TouchableOpacity onPress={() => setMenuVisible(true)}>
                     <Ionicons name="menu-outline" size={26} color={Colors.text} />
                 </TouchableOpacity>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -297,14 +309,28 @@ export default function DriverRouteOverview() {
                 ))}
             </ScrollView>
 
-            {/* Start Trip Button */}
+            {/* Trip Button */}
             <View style={{ padding: 20, backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.borderLight }}>
                 <Button
-                    title="Start Trip"
+                    title={tripActive ? 'Continue Trip' : 'Start Trip'}
                     onPress={() => router.push('/(driver)/navigation')}
-                    icon="play-circle-outline"
+                    icon={tripActive ? 'navigate-outline' : 'play-circle-outline'}
                 />
             </View>
+
+            {/* Side Menu */}
+            <SideMenu
+                visible={menuVisible}
+                onClose={() => setMenuVisible(false)}
+                userName="Driver"
+                items={[
+                    { icon: 'person-outline', label: 'My Profile', onPress: () => router.push('/(driver)/profile') },
+                    { icon: 'time-outline', label: 'Route History', onPress: () => router.push('/(driver)/history'), dividerAfter: true },
+                    { icon: 'settings-outline', label: 'Settings', onPress: () => { } },
+                    { icon: 'help-circle-outline', label: 'Help & FAQ', onPress: () => { }, dividerAfter: true },
+                    { icon: 'log-out-outline', label: 'Logout', onPress: () => router.replace('/') },
+                ]}
+            />
         </SafeAreaView>
     );
 }
