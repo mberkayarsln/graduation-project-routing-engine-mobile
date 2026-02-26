@@ -186,10 +186,13 @@ export default function DriverActiveNavigation() {
             const boarded = Object.values(passengerStatuses).filter(s => s === 'Boarded').length;
             const elapsed = Math.round((Date.now() - tripStartTime.getTime()) / 60000);
 
-            LocationStore.update({
-                ...LocationStore.get(),
-                tripActive: false,
-            });
+            const currentLocation = LocationStore.get();
+            if (currentLocation) {
+                LocationStore.update({
+                    ...currentLocation,
+                    tripActive: false,
+                });
+            }
 
             router.replace({
                 pathname: '/(driver)/trip_summary',
