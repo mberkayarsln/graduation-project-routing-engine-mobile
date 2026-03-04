@@ -1,31 +1,25 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, Switch, Platform, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, Platform, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
-import Button from '@/components/Button';
+
 import SideMenu from '@/components/SideMenu';
 import { LocationStore } from '@/services/LocationStore';
 import { api } from '@/services/api';
+import { AuthStore } from '@/services/AuthStore';
 import { Route, Vehicle } from '@/services/types';
 
 export default function DriverRouteOverview() {
     const router = useRouter();
-    const [isOnline, setIsOnline] = useState(true);
+
     const [loading, setLoading] = useState(true);
     const [route, setRoute] = useState<Route | null>(null);
     const [vehicle, setVehicle] = useState<Vehicle | null>(null);
     const [stopNames, setStopNames] = useState<Record<string, string>>({});
     const [menuVisible, setMenuVisible] = useState(false);
-    const [tripActive, setTripActive] = useState(false);
 
-    // Check LocationStore whenever this screen comes into focus
-    useFocusEffect(
-        useCallback(() => {
-            setTripActive(LocationStore.isActive());
-        }, [])
-    );
 
     useEffect(() => {
         loadData();
@@ -34,28 +28,40 @@ export default function DriverRouteOverview() {
     async function loadData() {
         try {
             setLoading(true);
+            const authUser = AuthStore.get();
+
             const [routes, vehicles] = await Promise.all([
                 api.getRoutes(),
                 api.getVehicles(),
             ]);
 
-            // Use the first route and vehicle for now (no auth to scope by driver)
-            if (routes.length > 0) {
-                setRoute(routes[0]);
+            // Scope route to the driver's assigned cluster
+            const myRoute =
+                (authUser?.routeClusterId != null
+                    ? routes.find(r => r.cluster_id === authUser.routeClusterId)
+                    : undefined) ??
+                routes[0] ??
+                null;
 
-                // Resolve stop names
-                if (routes[0].stops && routes[0].stops.length > 0) {
+            if (myRoute) {
+                setRoute(myRoute);
+                const stops = myRoute.bus_stops || myRoute.stops || [];
+                if (stops.length > 0) {
                     try {
-                        const names = await api.getStopNames(routes[0].stops);
+                        const names = await api.getStopNames(stops);
                         setStopNames(names);
-                    } catch {
-                        // Stop names are optional
-                    }
+                    } catch { /* Stop names are optional */ }
                 }
             }
-            if (vehicles.length > 0) {
-                setVehicle(vehicles[0]);
-            }
+
+            // Scope vehicle to the driver's assigned vehicle
+            const myVehicle =
+                (authUser?.vehicleId != null
+                    ? vehicles.find(v => v.id === authUser.vehicleId)
+                    : undefined) ??
+                vehicles[0] ??
+                null;
+            if (myVehicle) setVehicle(myVehicle);
         } catch (err) {
             console.error('Failed to load route data:', err);
         } finally {
@@ -124,26 +130,7 @@ export default function DriverRouteOverview() {
                 <TouchableOpacity onPress={() => setMenuVisible(true)}>
                     <Ionicons name="menu-outline" size={26} color={Colors.text} />
                 </TouchableOpacity>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <View
-                        style={{
-                            width: 8,
-                            height: 8,
-                            borderRadius: 4,
-                            backgroundColor: isOnline ? Colors.primary : Colors.textMuted,
-                        }}
-                    />
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: Colors.text }}>
-                        {isOnline ? 'Online' : 'Offline'}
-                    </Text>
-                    <Switch
-                        value={isOnline}
-                        onValueChange={setIsOnline}
-                        trackColor={{ false: Colors.border, true: Colors.primaryLight }}
-                        thumbColor={isOnline ? Colors.primary : Colors.textMuted}
-                        style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }}
-                    />
-                </View>
+                <Text style={{ fontSize: 17, fontWeight: '700', color: Colors.text }}>My Route</Text>
                 <TouchableOpacity>
                     <Ionicons name="notifications-outline" size={24} color={Colors.text} />
                 </TouchableOpacity>
@@ -235,88 +222,84 @@ export default function DriverRouteOverview() {
                     Itinerary
                 </Text>
 
-                {route.stops.map((stop, index) => (
-                    <View key={index} style={{ flexDirection: 'row', marginBottom: 4 }}>
-                        {/* Timeline */}
-                        <View style={{ alignItems: 'center', width: 24, marginRight: 16 }}>
-                            <View
-                                style={{
-                                    width: 12,
-                                    height: 12,
-                                    borderRadius: 6,
-                                    backgroundColor: index === 0 ? Colors.primary : Colors.white,
-                                    borderWidth: 2,
-                                    borderColor: Colors.primary,
-                                }}
-                            />
-                            {index < route.stops.length - 1 && (
+                {(route.bus_stops || route.stops).map((stop, index) => {
+                    const allStops = route.bus_stops || route.stops;
+                    return (
+                        <View key={index} style={{ flexDirection: 'row', marginBottom: 4 }}>
+                            {/* Timeline */}
+                            <View style={{ alignItems: 'center', width: 24, marginRight: 16 }}>
                                 <View
                                     style={{
-                                        width: 2,
-                                        flex: 1,
-                                        backgroundColor: Colors.primary,
-                                        opacity: 0.3,
-                                        minHeight: 50,
+                                        width: 12,
+                                        height: 12,
+                                        borderRadius: 6,
+                                        backgroundColor: index === 0 ? Colors.primary : Colors.white,
+                                        borderWidth: 2,
+                                        borderColor: Colors.primary,
                                     }}
                                 />
-                            )}
-                        </View>
-
-                        {/* Stop Content */}
-                        <View
-                            style={{
-                                flex: 1,
-                                backgroundColor: Colors.white,
-                                borderRadius: 12,
-                                padding: 16,
-                                marginBottom: 12,
-                                shadowColor: '#000',
-                                shadowOffset: { width: 0, height: 1 },
-                                shadowOpacity: 0.04,
-                                shadowRadius: 4,
-                                elevation: 1,
-                            }}
-                        >
-                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Text style={{ fontSize: 15, fontWeight: '600', color: Colors.text }}>
-                                    {getStopName(stop, index)}
-                                </Text>
-                                <Text style={{ fontSize: 14, fontWeight: '600', color: Colors.primary, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' }}>
-                                    {formatTime(index, route.stops.length)}
-                                </Text>
+                                {index < allStops.length - 1 && (
+                                    <View
+                                        style={{
+                                            width: 2,
+                                            flex: 1,
+                                            backgroundColor: Colors.primary,
+                                            opacity: 0.3,
+                                            minHeight: 50,
+                                        }}
+                                    />
+                                )}
                             </View>
-                            {index === route.stops.length - 1 && (
-                                <View
-                                    style={{
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                        marginTop: 8,
-                                        backgroundColor: Colors.primaryLight,
-                                        paddingHorizontal: 10,
-                                        paddingVertical: 4,
-                                        borderRadius: 6,
-                                        alignSelf: 'flex-start',
-                                    }}
-                                >
-                                    <Ionicons name="flag" size={14} color={Colors.primary} />
-                                    <Text style={{ fontSize: 13, color: Colors.primary, fontWeight: '600', marginLeft: 4 }}>
-                                        Destination
+
+                            {/* Stop Content */}
+                            <View
+                                style={{
+                                    flex: 1,
+                                    backgroundColor: Colors.white,
+                                    borderRadius: 12,
+                                    padding: 16,
+                                    marginBottom: 12,
+                                    shadowColor: '#000',
+                                    shadowOffset: { width: 0, height: 1 },
+                                    shadowOpacity: 0.04,
+                                    shadowRadius: 4,
+                                    elevation: 1,
+                                }}
+                            >
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <Text numberOfLines={1} style={{ flex: 1, marginRight: 8, fontSize: 15, fontWeight: '600', color: Colors.text }}>
+                                        {getStopName(stop, index)}
+                                    </Text>
+                                    <Text style={{ fontSize: 14, fontWeight: '600', color: Colors.primary, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' }}>
+                                        {formatTime(index, allStops.length)}
                                     </Text>
                                 </View>
-                            )}
+                                {index === allStops.length - 1 && (
+                                    <View
+                                        style={{
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
+                                            marginTop: 8,
+                                            backgroundColor: Colors.primaryLight,
+                                            paddingHorizontal: 10,
+                                            paddingVertical: 4,
+                                            borderRadius: 6,
+                                            alignSelf: 'flex-start',
+                                        }}
+                                    >
+                                        <Ionicons name="flag" size={14} color={Colors.primary} />
+                                        <Text style={{ fontSize: 13, color: Colors.primary, fontWeight: '600', marginLeft: 4 }}>
+                                            Destination
+                                        </Text>
+                                    </View>
+                                )}
+                            </View>
                         </View>
-                    </View>
-                ))}
+                    );
+                })}
             </ScrollView>
 
-            {/* Trip Button */}
-            <View style={{ padding: 20, backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.borderLight }}>
-                <Button
-                    title={tripActive ? 'Continue Trip' : 'Start Trip'}
-                    onPress={() => router.push('/(driver)/navigation')}
-                    icon={tripActive ? 'navigate-outline' : 'play-circle-outline'}
-                />
-            </View>
+
 
             {/* Side Menu */}
             <SideMenu
@@ -328,7 +311,7 @@ export default function DriverRouteOverview() {
                     { icon: 'time-outline', label: 'Route History', onPress: () => router.push('/(driver)/history'), dividerAfter: true },
                     { icon: 'settings-outline', label: 'Settings', onPress: () => { } },
                     { icon: 'help-circle-outline', label: 'Help & FAQ', onPress: () => { }, dividerAfter: true },
-                    { icon: 'log-out-outline', label: 'Logout', onPress: () => router.replace('/') },
+                    { icon: 'log-out-outline', label: 'Logout', onPress: () => { AuthStore.clear(); LocationStore.clear(); router.replace('/'); } },
                 ]}
             />
         </SafeAreaView>

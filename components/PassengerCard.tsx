@@ -3,21 +3,24 @@ import { View, Text, Image, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 
-export type PassengerStatus = 'Waiting' | 'Boarded';
+export type PassengerStatus = 'Waiting' | 'Boarded' | 'Absent';
 
 type PassengerCardProps = {
     name: string;
     status: PassengerStatus;
     avatar: string;
     stopName?: string;
+    /** Whether the status was set by the employee (self-check-in) vs driver */
+    selfConfirmed?: boolean;
     onPress?: () => void;
 };
 
-export default function PassengerCard({ name, status, avatar, stopName, onPress }: PassengerCardProps) {
+export default function PassengerCard({ name, status, avatar, stopName, selfConfirmed, onPress }: PassengerCardProps) {
     const isBoarded = status === 'Boarded';
+    const isAbsent = status === 'Absent';
 
-    const statusColor = isBoarded ? Colors.primary : Colors.textSecondary;
-    const statusBg = isBoarded ? Colors.primaryLight : 'transparent';
+    const statusColor = isBoarded ? Colors.primary : isAbsent ? '#EF4444' : Colors.textSecondary;
+    const statusBg = isBoarded ? Colors.primaryLight : isAbsent ? '#FEE2E2' : 'transparent';
 
     const Wrapper = onPress ? TouchableOpacity : View;
 
@@ -31,6 +34,7 @@ export default function PassengerCard({ name, status, avatar, stopName, onPress 
                 paddingVertical: 12,
                 borderBottomWidth: 1,
                 borderBottomColor: Colors.borderLight,
+                opacity: isAbsent ? 0.6 : 1,
             }}
         >
             <Image
@@ -41,15 +45,15 @@ export default function PassengerCard({ name, status, avatar, stopName, onPress 
                     borderRadius: 24,
                     marginRight: 12,
                     backgroundColor: Colors.borderLight,
-                    opacity: 1,
+                    opacity: isAbsent ? 0.5 : 1,
                 }}
             />
             <View style={{ flex: 1 }}>
                 <Text style={{
                     fontSize: 16,
                     fontWeight: '600',
-                    color: Colors.text,
-                    textDecorationLine: 'none',
+                    color: isAbsent ? Colors.textMuted : Colors.text,
+                    textDecorationLine: isAbsent ? 'line-through' : 'none',
                 }}>
                     {name}
                 </Text>
@@ -68,11 +72,24 @@ export default function PassengerCard({ name, status, avatar, stopName, onPress 
                     paddingVertical: status !== 'Waiting' ? 2 : 0,
                     borderRadius: 4,
                     alignSelf: 'flex-start',
+                    gap: 4,
                 }}>
-                    {isBoarded && <Ionicons name="checkmark-circle" size={14} color={statusColor} style={{ marginRight: 4 }} />}
+                    {isBoarded && <Ionicons name="checkmark-circle" size={14} color={statusColor} />}
+                    {isAbsent && <Ionicons name="close-circle" size={14} color={statusColor} />}
                     <Text style={{ fontSize: 13, color: statusColor, fontWeight: '600' }}>
                         {status}
                     </Text>
+                    {selfConfirmed && (
+                        <View style={{
+                            backgroundColor: isBoarded ? Colors.primary : '#EF4444',
+                            paddingHorizontal: 4,
+                            paddingVertical: 1,
+                            borderRadius: 3,
+                            marginLeft: 2,
+                        }}>
+                            <Text style={{ color: '#fff', fontSize: 9, fontWeight: '800' }}>SELF</Text>
+                        </View>
+                    )}
                 </View>
             </View>
             <View
@@ -80,14 +97,15 @@ export default function PassengerCard({ name, status, avatar, stopName, onPress 
                     width: 32,
                     height: 32,
                     borderRadius: 16,
-                    backgroundColor: isBoarded ? Colors.primary : 'transparent',
-                    borderWidth: isBoarded ? 0 : 2,
+                    backgroundColor: isBoarded ? Colors.primary : isAbsent ? '#EF4444' : 'transparent',
+                    borderWidth: (isBoarded || isAbsent) ? 0 : 2,
                     borderColor: Colors.border,
                     alignItems: 'center',
                     justifyContent: 'center',
                 }}
             >
                 {isBoarded && <Ionicons name="checkmark" size={18} color="#fff" />}
+                {isAbsent && <Ionicons name="close" size={18} color="#fff" />}
             </View>
         </Wrapper>
     );

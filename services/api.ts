@@ -1,4 +1,4 @@
-import { Route, Vehicle, Employee, Cluster, StopNamesMap } from './types';
+import { Route, Vehicle, Employee, Cluster, StopNamesMap, LoginPayload, LoginResponse } from './types';
 
 /**
  * Base URL for the Flask backend.
@@ -17,6 +17,14 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+    /** Authenticate employee or driver. */
+    login: (payload: LoginPayload) =>
+        request<LoginResponse>(`${API_BASE}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        }),
+
     /** Get all routes (lightweight, no bus stops by default) */
     getRoutes: () =>
         request<Route[]>(`${API_BASE}/api/routes?include_bus_stops=true`),

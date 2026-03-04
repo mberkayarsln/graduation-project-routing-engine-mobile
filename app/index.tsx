@@ -1,22 +1,75 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, SafeAreaView, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, SafeAreaView, ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Colors } from '@/constants/colors';
 import Button from '@/components/Button';
 import InputField from '@/components/InputField';
+import { api } from '@/services/api';
+import { AuthStore } from '@/services/AuthStore';
+import { LocationStore } from '@/services/LocationStore';
 
 export default function LoginScreen() {
   const router = useRouter();
   const [role, setRole] = useState<'employee' | 'driver'>('employee');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [identifier, setIdentifier] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSignIn = () => {
-    if (role === 'driver') {
-      router.replace('/(driver)/route');
-    } else {
-      router.replace('/(employee)/home');
+  const handleSignIn = async () => {
+    const trimmed = identifier.trim();
+    if (!trimmed) {
+      Alert.alert(
+        'Missing Information',
+        role === 'employee'
+          ? 'Please enter your Employee Name or ID.'
+          : 'Please enter your Driver Name or Vehicle ID.',
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const res = await api.login({ role, identifier: trimmed });
+
+      if (!res.success) {
+        Alert.alert('Login Failed', res.error || 'Could not authenticate. Please try again.');
+        return;
+      }
+
+      // Persist the session
+      if (res.role === 'employee') {
+        AuthStore.set({
+          role: 'employee',
+          id: res.id,
+          name: res.name,
+          email: res.email,
+          lat: res.lat,
+          lon: res.lon,
+          clusterId: res.cluster_id ?? null,
+          pickupPoint: res.pickup_point ?? null,
+          zoneId: res.zone_id ?? null,
+          excluded: res.excluded ?? false,
+        });
+        router.replace('/(employee)/home');
+      } else {
+        AuthStore.set({
+          role: 'driver',
+          id: res.id,
+          name: res.name,
+          email: res.email,
+          vehicleId: res.vehicle_id,
+          vehicleType: res.vehicle_type,
+          vehicleCapacity: res.vehicle_capacity,
+          routeClusterId: res.route_cluster_id ?? null,
+        });
+        // Clear any stale location data from a previous session
+        LocationStore.clear();
+        router.replace('/(driver)/route');
+      }
+    } catch (err: any) {
+      Alert.alert('Connection Error', 'Could not reach the server. Make sure the backend is running.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -120,7 +173,7 @@ export default function LoginScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Email Input */}
+          {/* Email / Identifier Input */}
           <Text
             style={{
               fontSize: 12,
@@ -131,48 +184,41 @@ export default function LoginScreen() {
               marginBottom: 8,
             }}
           >
-            Email Address
+            {role === 'employee' ? 'Employee Name or ID' : 'Driver Name or Vehicle ID'}
           </Text>
           <InputField
-            placeholder="name@company.com"
-            value={email}
-            onChangeText={setEmail}
-            icon="mail-outline"
-            keyboardType="email-address"
+            placeholder={
+              role === 'employee' ? 'e.g. "Employee 42" or "42"' : 'e.g. "Ahmet Yılmaz" or "3"'
+            }
+            value={identifier}
+            onChangeText={setIdentifier}
+            icon={role === 'employee' ? 'person-outline' : 'bus-outline'}
+            keyboardType="default"
           />
 
-          {/* Password Input */}
           <Text
             style={{
-              fontSize: 12,
-              fontWeight: '600',
-              color: Colors.primary,
-              textTransform: 'uppercase',
-              letterSpacing: 1,
-              marginTop: 20,
-              marginBottom: 8,
+              fontSize: 11,
+              color: Colors.textMuted,
+              marginTop: 10,
+              textAlign: 'center',
             }}
           >
-            Password
+            {role === 'employee'
+              ? 'Enter your full name as registered, or your numeric employee ID.'
+              : 'Enter your registered driver name or your vehicle ID number.'}
           </Text>
-          <InputField
-            placeholder="••••••••"
-            value={password}
-            onChangeText={setPassword}
-            icon="lock-closed-outline"
-            secureTextEntry
-          />
-
-          {/* Forgot Password */}
-          <TouchableOpacity style={{ alignSelf: 'flex-end', marginTop: 12 }}>
-            <Text style={{ fontSize: 14, color: Colors.textSecondary }}>
-              Forgot Password?
-            </Text>
-          </TouchableOpacity>
 
           {/* Sign In Button */}
           <View style={{ marginTop: 32 }}>
-            <Button title="Sign In" onPress={handleSignIn} />
+            {loading ? (
+              <View style={{ alignItems: 'center', paddingVertical: 16 }}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+                <Text style={{ marginTop: 8, color: Colors.textSecondary }}>Signing in…</Text>
+              </View>
+            ) : (
+              <Button title="Sign In" onPress={handleSignIn} />
+            )}
           </View>
 
           {/* Footer */}

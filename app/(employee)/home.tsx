@@ -7,6 +7,8 @@ import { Colors } from '@/constants/colors';
 import Button from '@/components/Button';
 import SideMenu from '@/components/SideMenu';
 import { api } from '@/services/api';
+import { AuthStore } from '@/services/AuthStore';
+import { LocationStore } from '@/services/LocationStore';
 import { Route, Vehicle, StopNamesMap } from '@/services/types';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -83,66 +85,59 @@ export default function EmployeeHome() {
 
     async function loadData() {
         try {
-            const [employees, routes, vehicles] = await Promise.all([
-                api.getEmployees(),
+            // Use the logged-in employee's data from AuthStore
+            const authUser = AuthStore.get();
+            if (!authUser || authUser.role !== 'employee') return;
+
+            setEmployeeName(authUser.name);
+
+            // Home location
+            if (authUser.lat != null && authUser.lon != null) {
+                const coords = { latitude: authUser.lat, longitude: authUser.lon };
+                setUserLocation(coords);
+                mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.03, longitudeDelta: 0.03 }, 1000);
+            }
+
+            // Assigned pickup stop
+            if (authUser.pickupPoint) {
+                setAssignedStop({
+                    latitude: authUser.pickupPoint[0],
+                    longitude: authUser.pickupPoint[1],
+                });
+            }
+
+            // Fetch only the routes + vehicle in parallel (no full employee list needed)
+            const [routes, vehicles] = await Promise.all([
                 api.getRoutes(),
                 api.getVehicles(),
             ]);
 
-            const emp = employees.find(e => e.cluster_id !== null) || employees[0];
-            if (emp) {
-                setEmployeeName(emp.name);
-                const coords = {
-                    latitude: emp.lat,
-                    longitude: emp.lon,
-                };
-                setUserLocation(coords);
-                mapRef.current?.animateToRegion({
-                    ...coords,
-                    latitudeDelta: 0.03,
-                    longitudeDelta: 0.03,
-                }, 1000);
+            // Match route to this employee's cluster
+            const matchingRoute = routes.find(r => r.cluster_id === authUser.clusterId) ?? routes[0] ?? null;
+            setRoute(matchingRoute);
 
-                // Set assigned stop
-                if (emp.pickup_point) {
-                    setAssignedStop({
-                        latitude: emp.pickup_point[0],
-                        longitude: emp.pickup_point[1],
-                    });
-                }
+            if (vehicles.length > 0) setVehicle(vehicles[0]);
 
-                const matchingRoute = routes.find(r => r.cluster_id === emp.cluster_id);
-                if (matchingRoute) {
-                    setRoute(matchingRoute);
-                } else if (routes.length > 0) {
-                    setRoute(routes[0]);
-                }
+            // Fetch pickup stop name
+            if (authUser.pickupPoint) {
+                try {
+                    const names = await api.getStopNames([[authUser.pickupPoint[0], authUser.pickupPoint[1]]]);
+                    const key = `${authUser.pickupPoint[0].toFixed(5)},${authUser.pickupPoint[1].toFixed(5)}`;
+                    setPickupStopName(names[key] || 'Bus Stop');
+                } catch { }
 
-                // Fetch pickup stop name
-                if (emp.pickup_point) {
-                    try {
-                        const names = await api.getStopNames([[emp.pickup_point[0], emp.pickup_point[1]]]);
-                        const key = `${emp.pickup_point[0].toFixed(5)},${emp.pickup_point[1].toFixed(5)}`;
-                        setPickupStopName(names[key] || 'Bus Stop');
-                    } catch { }
-                }
-
-                // Fetch walking route info
-                if (emp.pickup_point) {
+                // Walking distance via OSRM
+                if (authUser.lat != null && authUser.lon != null) {
                     try {
                         const walkData = await api.getWalkingRoute(
-                            emp.lat, emp.lon,
-                            emp.pickup_point[0], emp.pickup_point[1]
+                            authUser.lat, authUser.lon,
+                            authUser.pickupPoint[0], authUser.pickupPoint[1]
                         );
                         setWalkingDistance(Math.round(walkData.distance_km * 1000));
                         setWalkingDuration(Math.round(walkData.duration_min));
                     } catch { }
                 }
-            } else if (routes.length > 0) {
-                setRoute(routes[0]);
             }
-
-            if (vehicles.length > 0) setVehicle(vehicles[0]);
         } catch (err) {
             console.error('Failed to load data:', err);
         } finally {
@@ -452,7 +447,7 @@ export default function EmployeeHome() {
                                 </View>
                                 <View style={{ flex: 1 }}>
                                     <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.text }}>
-                                        {vehicle.driver_name}
+                                        JOHN DOE - 34 EG 6894 {/*vehicle.plate_number*/}
                                     </Text>
                                     <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 2 }}>
                                         {vehicle.vehicle_type} · {vehicle.capacity} seats
@@ -484,7 +479,7 @@ export default function EmployeeHome() {
                     { icon: 'settings-outline', label: 'Settings', onPress: () => router.push('/(employee)/settings') },
                     { icon: 'help-circle-outline', label: 'Help & FAQ', onPress: () => router.push('/(employee)/help') },
                     { icon: 'information-circle-outline', label: 'About', onPress: () => router.push('/(employee)/about'), dividerAfter: true },
-                    { icon: 'log-out-outline', label: 'Logout', onPress: () => router.replace('/') },
+                    { icon: 'log-out-outline', label: 'Logout', onPress: () => { AuthStore.clear(); LocationStore.clear(); router.replace('/'); } },
                 ]}
             />
         </View>

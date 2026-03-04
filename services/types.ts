@@ -2,6 +2,37 @@
  * TypeScript interfaces matching the Flask backend JSON responses.
  */
 
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+export interface LoginPayload {
+    role: 'employee' | 'driver';
+    /** Employee name / numeric ID, or driver name / vehicle ID */
+    identifier: string;
+}
+
+export interface LoginResponse {
+    success: boolean;
+    error?: string;
+    role: 'employee' | 'driver';
+    id: number;
+    name: string;
+    email: string;
+    // Employee
+    lat?: number;
+    lon?: number;
+    cluster_id?: number | null;
+    pickup_point?: [number, number] | null;
+    zone_id?: number | null;
+    excluded?: boolean;
+    // Driver
+    vehicle_id?: number;
+    vehicle_type?: string;
+    vehicle_capacity?: number;
+    route_cluster_id?: number | null;
+}
+
 export interface Route {
     cluster_id: number;
     center: [number, number];
@@ -21,6 +52,7 @@ export interface Vehicle {
     capacity: number;
     vehicle_type: string;
     driver_name: string;
+    plate_number: string;
 }
 
 export interface Employee {

@@ -5,7 +5,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import Button from '@/components/Button';
 import { api } from '@/services/api';
+import { AuthStore } from '@/services/AuthStore';
 import { LocationStore } from '@/services/LocationStore';
+import { BoardingStore, BoardingStatus } from '@/services/BoardingStore';
 import { Route, Vehicle, StopNamesMap } from '@/services/types';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -28,6 +30,8 @@ export default function EmployeeLiveTracking() {
     const [shuttleIndex, setShuttleIndex] = useState(0);
     const [locationInView, setLocationInView] = useState(false);
     const [driverLive, setDriverLive] = useState(false);
+    const [boardingResponse, setBoardingResponse] = useState<BoardingStatus | null>(null);
+    const [shuttleNearby, setShuttleNearby] = useState(false);
 
     const sheetHeight = useRef(new Animated.Value(SHEET_MAX_HEIGHT)).current;
     const lastHeight = useRef(SHEET_MAX_HEIGHT);
@@ -74,78 +78,55 @@ export default function EmployeeLiveTracking() {
         loadData();
     }, []);
 
-    /**
-     * TESTING ONLY: Uses the first employee's coordinates as the user's location
-     * and fetches the route matching that employee's cluster_id.
-     * For production, replace employee location with real GPS.
-     */
     async function loadData() {
         try {
             setLoading(true);
-            const [employees, routes, vehicles] = await Promise.all([
-                api.getEmployees(),
+
+            // Use the logged-in employee from AuthStore
+            const authUser = AuthStore.get();
+            if (!authUser || authUser.role !== 'employee') return;
+
+            if (authUser.lat != null && authUser.lon != null) {
+                setUserLocation({ latitude: authUser.lat, longitude: authUser.lon });
+            }
+
+            if (authUser.pickupPoint) {
+                setAssignedStop({
+                    latitude: authUser.pickupPoint[0],
+                    longitude: authUser.pickupPoint[1],
+                });
+            }
+
+            const [routes, vehicles] = await Promise.all([
                 api.getRoutes(),
                 api.getVehicles(),
             ]);
 
-            // Use first employee with a cluster as the mock user
-            const emp = employees.find(e => e.cluster_id !== null) || employees[0];
-            if (emp) {
-                setUserLocation({
-                    latitude: emp.lat,
-                    longitude: emp.lon,
-                });
-
-                // Set the employee's assigned pickup stop
-                if (emp.pickup_point) {
-                    setAssignedStop({
-                        latitude: emp.pickup_point[0],
-                        longitude: emp.pickup_point[1],
-                    });
-                }
-
-                // Find the route matching this employee's cluster
-                const matchingRoute = routes.find(r => r.cluster_id === emp.cluster_id);
-                if (matchingRoute) {
-                    setRoute(matchingRoute);
-                } else if (routes.length > 0) {
-                    setRoute(routes[0]);
-                }
-            } else if (routes.length > 0) {
-                setRoute(routes[0]);
-            }
-
+            const matchedRoute = routes.find(r => r.cluster_id === authUser.clusterId) ?? routes[0] ?? null;
+            setRoute(matchedRoute);
             if (vehicles.length > 0) setVehicle(vehicles[0]);
 
             // Fetch stop names
-            const matchedRoute = routes.find(r => r.cluster_id === emp?.cluster_id) || routes[0];
             if (matchedRoute) {
                 try {
                     const names = await api.getStopNames(matchedRoute.bus_stops || matchedRoute.stops);
                     setStopNames(names);
-                } catch (err) {
-                    console.log('Stop names not available');
-                }
+                } catch { }
             }
 
-            // Fetch OSRM walking route from employee to assigned stop
-            if (emp && emp.pickup_point) {
+            // OSRM walking route from employee home to pickup stop
+            if (authUser.pickupPoint && authUser.lat != null && authUser.lon != null) {
                 try {
                     const walkData = await api.getWalkingRoute(
-                        emp.lat, emp.lon,
-                        emp.pickup_point[0], emp.pickup_point[1]
+                        authUser.lat, authUser.lon,
+                        authUser.pickupPoint[0], authUser.pickupPoint[1]
                     );
                     setWalkingRoute(
-                        walkData.coordinates.map(c => ({
-                            latitude: c[0],
-                            longitude: c[1],
-                        }))
+                        walkData.coordinates.map(c => ({ latitude: c[0], longitude: c[1] }))
                     );
                     setWalkingDistance(Math.round(walkData.distance_km * 1000));
                     setWalkingDuration(Math.round(walkData.duration_min));
-                } catch (err) {
-                    console.log('Walking route not available, using straight line');
-                }
+                } catch { }
             }
         } catch (err) {
             console.error('Failed to load tracking data:', err);
@@ -180,6 +161,24 @@ export default function EmployeeLiveTracking() {
         longitude: c[1],
     }));
 
+    // Haversine distance in meters
+    function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+        const R = 6371000;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    // Check existing boarding response on mount
+    useEffect(() => {
+        const authUser = AuthStore.get();
+        if (authUser) {
+            const existing = BoardingStore.getStatus(authUser.id);
+            if (existing) setBoardingResponse(existing);
+        }
+    }, []);
+
     useEffect(() => {
         if (routeCoordinates.length === 0) return;
         const interval = setInterval(() => {
@@ -208,9 +207,33 @@ export default function EmployeeLiveTracking() {
                     return prev + 1;
                 });
             }
-        }, 200);
+
+            // Proximity check: is shuttle near the employee's assigned stop?
+            if (assignedStop && routeCoordinates.length > 0) {
+                const currentPos = routeCoordinates[shuttleIndex] || routeCoordinates[0];
+                const dist = getDistanceMeters(
+                    currentPos.latitude, currentPos.longitude,
+                    assignedStop.latitude, assignedStop.longitude
+                );
+                setShuttleNearby(dist < 300); // within 300m
+            }
+        }, 500);
         return () => clearInterval(interval);
-    }, [routeCoordinates.length, route]);
+    }, [routeCoordinates.length, route, assignedStop, shuttleIndex]);
+
+    function handleBoardingConfirm() {
+        const authUser = AuthStore.get();
+        if (!authUser) return;
+        BoardingStore.confirm(authUser.id);
+        setBoardingResponse('confirmed');
+    }
+
+    function handleBoardingDecline() {
+        const authUser = AuthStore.get();
+        if (!authUser) return;
+        BoardingStore.decline(authUser.id);
+        setBoardingResponse('declined');
+    }
 
     if (loading) {
         return (
@@ -259,7 +282,7 @@ export default function EmployeeLiveTracking() {
 
     const driverName = vehicle?.driver_name || 'Driver';
     const vehicleType = vehicle?.vehicle_type || 'Shuttle';
-    const vehiclePlate = 'V-' + (vehicle?.id || '?');
+    const vehiclePlate = vehicle?.plate_number || 'N/A';
 
     return (
         <View style={{ flex: 1 }}>
@@ -669,6 +692,92 @@ export default function EmployeeLiveTracking() {
                             })()}
                         </View>
                     )}
+
+                    {/* Boarding Prompt */}
+                    {boardingResponse === 'confirmed' ? (
+                        <View style={{
+                            backgroundColor: Colors.primaryLight,
+                            borderRadius: 12,
+                            padding: 16,
+                            alignItems: 'center',
+                            marginBottom: 12,
+                            borderWidth: 1,
+                            borderColor: Colors.primary + '30',
+                        }}>
+                            <View style={{
+                                width: 44, height: 44, borderRadius: 22,
+                                backgroundColor: Colors.primary,
+                                alignItems: 'center', justifyContent: 'center',
+                                marginBottom: 8,
+                            }}>
+                                <Ionicons name="checkmark" size={26} color="#fff" />
+                            </View>
+                            <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.primary }}>Boarding Confirmed</Text>
+                            <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 4 }}>Your driver has been notified</Text>
+                        </View>
+                    ) : boardingResponse === 'declined' ? (
+                        <View style={{
+                            backgroundColor: '#FEF2F2',
+                            borderRadius: 12,
+                            padding: 16,
+                            alignItems: 'center',
+                            marginBottom: 12,
+                            borderWidth: 1,
+                            borderColor: '#FECACA',
+                        }}>
+                            <View style={{
+                                width: 44, height: 44, borderRadius: 22,
+                                backgroundColor: '#EF4444',
+                                alignItems: 'center', justifyContent: 'center',
+                                marginBottom: 8,
+                            }}>
+                                <Ionicons name="close" size={26} color="#fff" />
+                            </View>
+                            <Text style={{ fontSize: 16, fontWeight: '700', color: '#EF4444' }}>Not Riding Today</Text>
+                            <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 4 }}>Your driver has been notified</Text>
+                        </View>
+                    ) : shuttleNearby ? (
+                        <View style={{
+                            backgroundColor: Colors.primaryLight,
+                            borderRadius: 12,
+                            padding: 16,
+                            marginBottom: 12,
+                            borderWidth: 1,
+                            borderColor: Colors.primary + '30',
+                        }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                                <View style={{
+                                    width: 40, height: 40, borderRadius: 20,
+                                    backgroundColor: Colors.primary,
+                                    alignItems: 'center', justifyContent: 'center',
+                                    marginRight: 12,
+                                }}>
+                                    <Ionicons name="bus" size={22} color="#fff" />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.text }}>Your shuttle is arriving!</Text>
+                                    <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 2 }}>Confirm your boarding status</Text>
+                                </View>
+                            </View>
+                            <View style={{ flexDirection: 'row', gap: 10 }}>
+                                <View style={{ flex: 1 }}>
+                                    <Button
+                                        title="I'm on Board"
+                                        onPress={handleBoardingConfirm}
+                                        icon="checkmark-circle-outline"
+                                    />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Button
+                                        title="Not Today"
+                                        onPress={handleBoardingDecline}
+                                        icon="close-circle-outline"
+                                        variant="outline"
+                                    />
+                                </View>
+                            </View>
+                        </View>
+                    ) : null}
 
                     {/* Action Buttons */}
                     <SafeAreaView>
