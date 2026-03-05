@@ -92,21 +92,7 @@ export default function PassengerCard({ name, status, avatar, stopName, selfConf
                     )}
                 </View>
             </View>
-            <View
-                style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: 16,
-                    backgroundColor: isBoarded ? Colors.primary : isAbsent ? '#EF4444' : 'transparent',
-                    borderWidth: (isBoarded || isAbsent) ? 0 : 2,
-                    borderColor: Colors.border,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                }}
-            >
-                {isBoarded && <Ionicons name="checkmark" size={18} color="#fff" />}
-                {isAbsent && <Ionicons name="close" size={18} color="#fff" />}
-            </View>
+
         </Wrapper>
     );
 }

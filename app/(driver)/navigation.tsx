@@ -71,6 +71,7 @@ export default function DriverActiveNavigation() {
             setCurrentStopIndex(0);
             setExpanded(true);
             setSelfConfirmedIds(new Set());
+
             sheetHeight.setValue(SHEET_MAX_HEIGHT);
             lastHeight.current = SHEET_MAX_HEIGHT;
             BoardingStore.clear();
@@ -147,7 +148,7 @@ export default function DriverActiveNavigation() {
         setTripStarted(true);
     }
 
-    // Poll BoardingStore for employee self-check-ins
+    // Poll BoardingStore for employee self-check-ins (read-only)
     useEffect(() => {
         if (!tripStarted || passengers.length === 0) return;
         const interval = setInterval(() => {
@@ -229,16 +230,6 @@ export default function DriverActiveNavigation() {
         return stopNames[key] || 'Bus Stop';
     }
 
-    function togglePassengerStatus(passengerId: number) {
-        setPassengerStatuses(prev => {
-            const current = prev[passengerId] || 'Waiting';
-            let next: PassengerStatus;
-            if (current === 'Waiting') next = 'Boarded';
-            else if (current === 'Boarded') next = 'Absent';
-            else next = 'Waiting';
-            return { ...prev, [passengerId]: next };
-        });
-    }
 
     function handleArrivedAtStop() {
         if (!route) return;
@@ -246,7 +237,7 @@ export default function DriverActiveNavigation() {
         const isLastStop = currentStopIndex >= stops.length - 1;
 
         if (isLastStop) {
-            const boarded = Object.values(passengerStatuses).filter(s => s === 'Boarded').length;
+            const boarded = Object.values(BoardingStore.getAll()).filter(s => s === 'confirmed').length;
             const elapsed = Math.round((Date.now() - tripStartTime.getTime()) / 60000);
 
             const currentLocation = LocationStore.get();
@@ -284,7 +275,7 @@ export default function DriverActiveNavigation() {
                     style: 'destructive',
                     onPress: () => {
                         if (!route) return;
-                        const boarded = Object.values(passengerStatuses).filter(s => s === 'Boarded').length;
+                        const boarded = Object.values(BoardingStore.getAll()).filter(s => s === 'confirmed').length;
                         const elapsed = Math.round((Date.now() - tripStartTime.getTime()) / 60000);
 
                         const currentLocation = LocationStore.get();
@@ -545,9 +536,9 @@ export default function DriverActiveNavigation() {
                         )}
                     </View>
 
-                    {/* Passenger List */}
+                    {/* Passenger List (read-only, auto-updated via self-check-in) */}
                     <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>
-                        Passengers — Tap to update status
+                        Passengers
                     </Text>
                     {passengers.map((passenger) => (
                         <PassengerCard
@@ -557,7 +548,6 @@ export default function DriverActiveNavigation() {
                             avatar={`https://i.pravatar.cc/100?u=${passenger.id}`}
                             stopName={passenger.pickup_point ? getStopName(passenger.pickup_point) : 'Unknown Stop'}
                             selfConfirmed={selfConfirmedIds.has(passenger.id)}
-                            onPress={() => togglePassengerStatus(passenger.id)}
                         />
                     ))}
 
