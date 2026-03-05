@@ -593,6 +593,92 @@ export default function EmployeeLiveTracking() {
                         />
                     </View>
 
+                    {/* Boarding Prompt */}
+                    {boardingResponse === 'confirmed' ? (
+                        <View style={{
+                            backgroundColor: Colors.primaryLight,
+                            borderRadius: 12,
+                            padding: 16,
+                            alignItems: 'center',
+                            marginBottom: 12,
+                            borderWidth: 1,
+                            borderColor: Colors.primary + '30',
+                        }}>
+                            <View style={{
+                                width: 44, height: 44, borderRadius: 22,
+                                backgroundColor: Colors.primary,
+                                alignItems: 'center', justifyContent: 'center',
+                                marginBottom: 8,
+                            }}>
+                                <Ionicons name="checkmark" size={26} color="#fff" />
+                            </View>
+                            <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.primary }}>You're Checked In!</Text>
+                            <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 4 }}>Your driver has been notified</Text>
+                        </View>
+                    ) : boardingResponse === 'declined' ? (
+                        <View style={{
+                            backgroundColor: '#FEF2F2',
+                            borderRadius: 12,
+                            padding: 16,
+                            alignItems: 'center',
+                            marginBottom: 12,
+                            borderWidth: 1,
+                            borderColor: '#FECACA',
+                        }}>
+                            <View style={{
+                                width: 44, height: 44, borderRadius: 22,
+                                backgroundColor: '#EF4444',
+                                alignItems: 'center', justifyContent: 'center',
+                                marginBottom: 8,
+                            }}>
+                                <Ionicons name="close" size={26} color="#fff" />
+                            </View>
+                            <Text style={{ fontSize: 16, fontWeight: '700', color: '#EF4444' }}>Not Riding Today</Text>
+                            <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 4 }}>Your driver has been notified</Text>
+                        </View>
+                    ) : shuttleNearby ? (
+                        <View style={{
+                            backgroundColor: Colors.primaryLight,
+                            borderRadius: 12,
+                            padding: 16,
+                            marginBottom: 12,
+                            borderWidth: 1,
+                            borderColor: Colors.primary + '30',
+                        }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                                <View style={{
+                                    width: 40, height: 40, borderRadius: 20,
+                                    backgroundColor: Colors.primary,
+                                    alignItems: 'center', justifyContent: 'center',
+                                    marginRight: 12,
+                                }}>
+                                    <Ionicons name="bus" size={22} color="#fff" />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.text }}>Your shuttle is arriving!</Text>
+                                    <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 2 }}>Confirm your boarding status</Text>
+                                </View>
+                            </View>
+                            <View style={{ flexDirection: 'row', gap: 10 }}>
+                                <View style={{ flex: 1 }}>
+                                    <Button
+                                        title="I'm on Board"
+                                        onPress={handleBoardingConfirm}
+                                        icon="checkmark-circle-outline"
+                                    />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Button
+                                        title="Not Today"
+                                        onPress={handleBoardingDecline}
+                                        icon="close-circle-outline"
+                                        variant="outline"
+                                    />
+                                </View>
+                            </View>
+                        </View>
+                    ) : null}
+
                     {/* Driver Info Card */}
                     <View
                         style={{
@@ -693,91 +779,7 @@ export default function EmployeeLiveTracking() {
                         </View>
                     )}
 
-                    {/* Boarding Prompt */}
-                    {boardingResponse === 'confirmed' ? (
-                        <View style={{
-                            backgroundColor: Colors.primaryLight,
-                            borderRadius: 12,
-                            padding: 16,
-                            alignItems: 'center',
-                            marginBottom: 12,
-                            borderWidth: 1,
-                            borderColor: Colors.primary + '30',
-                        }}>
-                            <View style={{
-                                width: 44, height: 44, borderRadius: 22,
-                                backgroundColor: Colors.primary,
-                                alignItems: 'center', justifyContent: 'center',
-                                marginBottom: 8,
-                            }}>
-                                <Ionicons name="checkmark" size={26} color="#fff" />
-                            </View>
-                            <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.primary }}>Boarding Confirmed</Text>
-                            <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 4 }}>Your driver has been notified</Text>
-                        </View>
-                    ) : boardingResponse === 'declined' ? (
-                        <View style={{
-                            backgroundColor: '#FEF2F2',
-                            borderRadius: 12,
-                            padding: 16,
-                            alignItems: 'center',
-                            marginBottom: 12,
-                            borderWidth: 1,
-                            borderColor: '#FECACA',
-                        }}>
-                            <View style={{
-                                width: 44, height: 44, borderRadius: 22,
-                                backgroundColor: '#EF4444',
-                                alignItems: 'center', justifyContent: 'center',
-                                marginBottom: 8,
-                            }}>
-                                <Ionicons name="close" size={26} color="#fff" />
-                            </View>
-                            <Text style={{ fontSize: 16, fontWeight: '700', color: '#EF4444' }}>Not Riding Today</Text>
-                            <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 4 }}>Your driver has been notified</Text>
-                        </View>
-                    ) : shuttleNearby ? (
-                        <View style={{
-                            backgroundColor: Colors.primaryLight,
-                            borderRadius: 12,
-                            padding: 16,
-                            marginBottom: 12,
-                            borderWidth: 1,
-                            borderColor: Colors.primary + '30',
-                        }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-                                <View style={{
-                                    width: 40, height: 40, borderRadius: 20,
-                                    backgroundColor: Colors.primary,
-                                    alignItems: 'center', justifyContent: 'center',
-                                    marginRight: 12,
-                                }}>
-                                    <Ionicons name="bus" size={22} color="#fff" />
-                                </View>
-                                <View style={{ flex: 1 }}>
-                                    <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.text }}>Your shuttle is arriving!</Text>
-                                    <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 2 }}>Confirm your boarding status</Text>
-                                </View>
-                            </View>
-                            <View style={{ flexDirection: 'row', gap: 10 }}>
-                                <View style={{ flex: 1 }}>
-                                    <Button
-                                        title="I'm on Board"
-                                        onPress={handleBoardingConfirm}
-                                        icon="checkmark-circle-outline"
-                                    />
-                                </View>
-                                <View style={{ flex: 1 }}>
-                                    <Button
-                                        title="Not Today"
-                                        onPress={handleBoardingDecline}
-                                        icon="close-circle-outline"
-                                        variant="outline"
-                                    />
-                                </View>
-                            </View>
-                        </View>
-                    ) : null}
+                    
 
                     {/* Action Buttons */}
                     <SafeAreaView>
