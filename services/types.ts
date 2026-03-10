@@ -95,3 +95,55 @@ export interface Cluster {
 export interface StopNamesMap {
     [coordinateKey: string]: string;
 }
+
+// ---------------------------------------------------------------------------
+// Trip History
+// ---------------------------------------------------------------------------
+
+export interface TripHistory {
+    id: number;
+    route_id: number;
+    driver_name: string | null;
+    vehicle_plate: string | null;
+    distance_km: number;
+    duration_min: number;
+    total_stops: number;
+    total_passengers: number;
+    boarded_count: number;
+    absent_count: number;
+    started_at: string;
+    ended_at: string | null;
+    status: 'completed' | 'terminated';
+    /** Only present on employee queries */
+    boarding_status?: 'confirmed' | 'declined' | 'waiting';
+}
+
+export interface TripPassenger {
+    employee_id: number;
+    employee_name: string;
+    boarding_status: 'confirmed' | 'declined' | 'waiting';
+}
+
+export interface TripDetail extends TripHistory {
+    driver_id: number | null;
+    vehicle_id: number | null;
+    passengers: TripPassenger[];
+}
+
+export interface SaveTripPayload {
+    routeId: number;
+    driverId?: number;
+    driverName?: string;
+    vehicleId?: number;
+    vehiclePlate?: string;
+    distanceKm: number;
+    durationMin: number;
+    totalStops: number;
+    totalPassengers: number;
+    boardedCount: number;
+    absentCount: number;
+    startedAt: string;
+    endedAt: string;
+    status: 'completed' | 'terminated';
+    passengers?: { employee_id: number; employee_name: string; boarding_status: string }[];
+}

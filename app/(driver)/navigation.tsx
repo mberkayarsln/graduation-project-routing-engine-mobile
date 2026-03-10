@@ -9,6 +9,7 @@ import Button from '@/components/Button';
 import PassengerCard, { PassengerStatus } from '@/components/PassengerCard';
 import { LocationStore } from '@/services/LocationStore';
 import { BoardingStore } from '@/services/BoardingStore';
+import { SocketService } from '@/services/SocketService';
 import { api } from '@/services/api';
 import { AuthStore } from '@/services/AuthStore';
 import { Route, Vehicle, ClusterEmployee } from '@/services/types';
@@ -32,6 +33,7 @@ export default function DriverActiveNavigation() {
     const [expanded, setExpanded] = useState(true);
     const [shuttleIndex, setShuttleIndex] = useState(0);
     const [selfConfirmedIds, setSelfConfirmedIds] = useState<Set<number>>(new Set());
+    const [socketConnected, setSocketConnected] = useState(false);
     const mapRef = useRef<MapView>(null);
     const sheetHeight = useRef(new Animated.Value(SHEET_MAX_HEIGHT)).current;
     const lastHeight = useRef(SHEET_MAX_HEIGHT);
@@ -61,6 +63,37 @@ export default function DriverActiveNavigation() {
         lastHeight.current = target;
         setExpanded(!expanded);
     }
+
+    // Connect to Socket.IO and join route room
+    useEffect(() => {
+        SocketService.connect();
+        const unsubConnection = SocketService.onConnectionChange((connected) => {
+            setSocketConnected(connected);
+        });
+        return () => {
+            unsubConnection();
+        };
+    }, []);
+
+    // Listen for boarding updates from passengers via Socket.IO
+    useEffect(() => {
+        const unsubBoarding = SocketService.onBoardingChanged((data) => {
+            const { employeeId, status } = data;
+            if (status === 'confirmed') {
+                setPassengerStatuses(prev => ({ ...prev, [employeeId]: 'Boarded' }));
+                setSelfConfirmedIds(prev => new Set(prev).add(employeeId));
+                // Also update local BoardingStore for trip summary
+                BoardingStore.confirm(employeeId);
+            } else if (status === 'declined') {
+                setPassengerStatuses(prev => ({ ...prev, [employeeId]: 'Absent' }));
+                setSelfConfirmedIds(prev => new Set(prev).add(employeeId));
+                BoardingStore.decline(employeeId);
+            }
+        });
+        return () => {
+            unsubBoarding();
+        };
+    }, []);
 
     // Reset all trip state whenever this screen comes into focus
     useFocusEffect(
@@ -129,10 +162,11 @@ export default function DriverActiveNavigation() {
         }
     }, [shuttleIndex]);
 
-    // Publish to LocationStore (only after trip started)
+    // Publish location via Socket.IO + local LocationStore (only after trip started)
     useEffect(() => {
         if (!tripStarted || !route || routeCoordinates.length === 0) return;
         const pos = routeCoordinates[shuttleIndex] || routeCoordinates[0];
+        // Local store (backward compat)
         LocationStore.update({
             latitude: pos.latitude,
             longitude: pos.longitude,
@@ -141,14 +175,37 @@ export default function DriverActiveNavigation() {
             tripActive: true,
             routeId: route.cluster_id,
         });
+        // Broadcast to passengers via Socket.IO
+        SocketService.sendLocationUpdate({
+            routeId: route.cluster_id,
+            latitude: pos.latitude,
+            longitude: pos.longitude,
+            currentStopIndex,
+        });
     }, [tripStarted, shuttleIndex, currentStopIndex, route]);
 
     function handleStartTrip() {
+        if (!route) return;
+        const pos = routeCoordinates[0] || { latitude: 0, longitude: 0 };
+        const dName = vehicle?.driver_name || 'Driver';
+        const vPlate = vehicle?.plate_number || 'N/A';
+
+        // Join the route room and broadcast trip_start via Socket.IO
+        SocketService.joinRoute(route.cluster_id, 'driver');
+        SocketService.startTrip({
+            routeId: route.cluster_id,
+            latitude: pos.latitude,
+            longitude: pos.longitude,
+            totalStops: stops.length,
+            driverName: dName,
+            vehiclePlate: vPlate,
+        });
+
         setTripStartTime(new Date());
         setTripStarted(true);
     }
 
-    // Poll BoardingStore for employee self-check-ins (read-only)
+    // Fallback: also poll BoardingStore locally (in case socket was slow)
     useEffect(() => {
         if (!tripStarted || passengers.length === 0) return;
         const interval = setInterval(() => {
@@ -177,32 +234,24 @@ export default function DriverActiveNavigation() {
         try {
             setLoading(true);
             const authUser = AuthStore.get();
+            const clusterId = authUser?.routeClusterId;
+            if (!clusterId) {
+                console.warn('No assigned route cluster');
+                return;
+            }
 
-            const [routes, vehicles] = await Promise.all([
-                api.getRoutes(),
-                api.getVehicles(),
+            // Fetch the driver's own route, vehicle, and cluster in parallel
+            const [myRoute, myVehicle, cluster] = await Promise.all([
+                api.getRoute(clusterId),
+                authUser?.vehicleId
+                    ? api.getVehicle(authUser.vehicleId).catch(() => null)
+                    : Promise.resolve(null),
+                api.getCluster(clusterId),
             ]);
-            if (routes.length === 0) return;
 
-            // Scope to driver's assigned cluster
-            const myRoute =
-                (authUser?.routeClusterId != null
-                    ? routes.find(r => r.cluster_id === authUser.routeClusterId)
-                    : undefined) ??
-                routes[0];
             setRoute(myRoute);
-
-            // Scope to driver's assigned vehicle
-            const myVehicle =
-                (authUser?.vehicleId != null
-                    ? vehicles.find(v => v.id === authUser.vehicleId)
-                    : undefined) ??
-                vehicles[0] ??
-                null;
             if (myVehicle) setVehicle(myVehicle);
 
-            // Load cluster for passenger data
-            const cluster = await api.getCluster(myRoute.cluster_id);
             if (cluster.employees) {
                 setPassengers(cluster.employees);
                 const statuses: Record<number, PassengerStatus> = {};
@@ -210,13 +259,12 @@ export default function DriverActiveNavigation() {
                 setPassengerStatuses(statuses);
             }
 
-            // Resolve stop names
+            // Resolve stop names (non-blocking)
             const routeStops = myRoute.bus_stops || myRoute.stops;
             if (routeStops && routeStops.length > 0) {
-                try {
-                    const names = await api.getStopNames(routeStops);
-                    setStopNames(names);
-                } catch { /* Optional */ }
+                api.getStopNames(routeStops)
+                    .then(names => setStopNames(names))
+                    .catch(() => {});
             }
         } catch (err) {
             console.error('Failed to load navigation data:', err);
@@ -234,11 +282,25 @@ export default function DriverActiveNavigation() {
     function handleArrivedAtStop() {
         if (!route) return;
 
+        // Notify passengers that boarding check is starting at this stop
+        const currentStop = stops[currentStopIndex];
+        if (currentStop) {
+            SocketService.startBoardingCheck({
+                routeId: route.cluster_id,
+                stopIndex: currentStopIndex,
+                stopName: getStopName(currentStop),
+            });
+        }
+
         const isLastStop = currentStopIndex >= stops.length - 1;
 
         if (isLastStop) {
             const boarded = Object.values(BoardingStore.getAll()).filter(s => s === 'confirmed').length;
+            const absentCount = Object.values(BoardingStore.getAll()).filter(s => s === 'declined').length;
             const elapsed = Math.round((Date.now() - tripStartTime.getTime()) / 60000);
+
+            // End trip via Socket.IO
+            SocketService.endTrip(route.cluster_id);
 
             const currentLocation = LocationStore.get();
             if (currentLocation) {
@@ -248,15 +310,30 @@ export default function DriverActiveNavigation() {
                 });
             }
 
+            const auth = AuthStore.get();
+            const passengersData = passengers.map(p => ({
+                employee_id: p.id,
+                employee_name: p.name,
+                boarding_status: passengerStatuses[p.id] === 'Boarded' ? 'confirmed' : passengerStatuses[p.id] === 'Absent' ? 'declined' : 'waiting',
+            }));
+
             router.replace({
                 pathname: '/(driver)/trip_summary',
                 params: {
                     boarded: String(boarded),
+                    absentCount: String(absentCount),
                     totalPassengers: String(passengers.length),
                     totalStops: String(stops.length),
                     distanceKm: String(route.distance_km),
                     durationMin: String(elapsed || Math.round(route.duration_min)),
                     routeId: String(route.cluster_id),
+                    driverId: String(auth?.id || 0),
+                    driverName: auth?.name || '',
+                    vehicleId: String(vehicle?.id || auth?.vehicleId || 0),
+                    vehiclePlate: vehicle?.plate_number || '',
+                    startedAt: tripStartTime.toISOString(),
+                    status: 'completed',
+                    passengersJson: JSON.stringify(passengersData),
                 },
             });
         } else {
@@ -276,7 +353,11 @@ export default function DriverActiveNavigation() {
                     onPress: () => {
                         if (!route) return;
                         const boarded = Object.values(BoardingStore.getAll()).filter(s => s === 'confirmed').length;
+                        const absentCount = Object.values(BoardingStore.getAll()).filter(s => s === 'declined').length;
                         const elapsed = Math.round((Date.now() - tripStartTime.getTime()) / 60000);
+
+                        // End trip via Socket.IO
+                        SocketService.endTrip(route.cluster_id);
 
                         const currentLocation = LocationStore.get();
                         if (currentLocation) {
@@ -286,15 +367,30 @@ export default function DriverActiveNavigation() {
                             });
                         }
 
+                        const auth = AuthStore.get();
+                        const passengersData = passengers.map(p => ({
+                            employee_id: p.id,
+                            employee_name: p.name,
+                            boarding_status: passengerStatuses[p.id] === 'Boarded' ? 'confirmed' : passengerStatuses[p.id] === 'Absent' ? 'declined' : 'waiting',
+                        }));
+
                         router.replace({
                             pathname: '/(driver)/trip_summary',
                             params: {
                                 boarded: String(boarded),
+                                absentCount: String(absentCount),
                                 totalPassengers: String(passengers.length),
                                 totalStops: String(currentStopIndex + 1),
                                 distanceKm: String(route.distance_km),
                                 durationMin: String(elapsed || Math.round(route.duration_min)),
                                 routeId: String(route.cluster_id),
+                                driverId: String(auth?.id || 0),
+                                driverName: auth?.name || '',
+                                vehicleId: String(vehicle?.id || auth?.vehicleId || 0),
+                                vehiclePlate: vehicle?.plate_number || '',
+                                startedAt: tripStartTime.toISOString(),
+                                status: 'terminated',
+                                passengersJson: JSON.stringify(passengersData),
                             },
                         });
                     },
@@ -450,6 +546,29 @@ export default function DriverActiveNavigation() {
                 </Text>
             </View>
 
+            {/* Live Indicator */}
+            {tripStarted && (
+                <View
+                    style={{
+                        position: 'absolute',
+                        top: 60,
+                        left: 16,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: socketConnected ? '#22C55E' : '#EF4444',
+                        paddingHorizontal: 10,
+                        paddingVertical: 6,
+                        borderRadius: 8,
+                        gap: 6,
+                    }}
+                >
+                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />
+                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>
+                        {socketConnected ? 'LIVE' : 'OFFLINE'}
+                    </Text>
+                </View>
+            )}
+
 
             {/* Draggable Bottom Sheet */}
             <Animated.View
@@ -536,24 +655,9 @@ export default function DriverActiveNavigation() {
                         )}
                     </View>
 
-                    {/* Passenger List (read-only, auto-updated via self-check-in) */}
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>
-                        Passengers
-                    </Text>
-                    {passengers.map((passenger) => (
-                        <PassengerCard
-                            key={passenger.id}
-                            name={passenger.name}
-                            status={passengerStatuses[passenger.id] || 'Waiting'}
-                            avatar={`https://i.pravatar.cc/100?u=${passenger.id}`}
-                            stopName={passenger.pickup_point ? getStopName(passenger.pickup_point) : 'Unknown Stop'}
-                            selfConfirmed={selfConfirmedIds.has(passenger.id)}
-                        />
-                    ))}
-
                     {/* Start Trip / Trip Complete buttons */}
                     {!tripStarted ? (
-                        <View style={{ paddingTop: 16 }}>
+                        <View>
                             <Button
                                 title="Start Trip"
                                 onPress={handleStartTrip}
@@ -584,6 +688,21 @@ export default function DriverActiveNavigation() {
                             />
                         </View>
                     )}
+
+                    {/* Passenger List (read-only, auto-updated via self-check-in) */}
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4, paddingTop: 16 }}>
+                        Passengers
+                    </Text>
+                    {passengers.map((passenger) => (
+                        <PassengerCard
+                            key={passenger.id}
+                            name={passenger.name}
+                            status={passengerStatuses[passenger.id] || 'Waiting'}
+                            avatar={`https://i.pravatar.cc/100?u=${passenger.id}`}
+                            stopName={passenger.pickup_point ? getStopName(passenger.pickup_point) : 'Unknown Stop'}
+                            selfConfirmed={selfConfirmedIds.has(passenger.id)}
+                        />
+                    ))}
                 </ScrollView>
             </Animated.View>
         </View>

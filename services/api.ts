@@ -1,4 +1,4 @@
-import { Route, Vehicle, Employee, Cluster, StopNamesMap, LoginPayload, LoginResponse } from './types';
+import { Route, Vehicle, Employee, Cluster, StopNamesMap, LoginPayload, LoginResponse, TripHistory, TripDetail, SaveTripPayload } from './types';
 
 /**
  * Base URL for the Flask backend.
@@ -37,6 +37,10 @@ export const api = {
     getVehicles: () =>
         request<Vehicle[]>(`${API_BASE}/api/vehicles`),
 
+    /** Get a single vehicle by ID */
+    getVehicle: (id: number) =>
+        request<Vehicle>(`${API_BASE}/api/vehicles/${id}`),
+
     /** Get all employees */
     getEmployees: () =>
         request<Employee[]>(`${API_BASE}/api/employees`),
@@ -62,4 +66,28 @@ export const api = {
         request<{ coordinates: number[][]; distance_km: number; duration_min: number }>(
             `${API_BASE}/api/walking-route?origin_lat=${originLat}&origin_lon=${originLon}&dest_lat=${destLat}&dest_lon=${destLon}`
         ),
+
+    // -----------------------------------------------------------------------
+    // Trip History
+    // -----------------------------------------------------------------------
+
+    /** Save a completed trip */
+    saveTrip: (payload: SaveTripPayload) =>
+        request<{ id: number }>(`${API_BASE}/api/trips`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        }),
+
+    /** Get trip history for the current driver */
+    getDriverTrips: (driverId: number, limit = 50) =>
+        request<TripHistory[]>(`${API_BASE}/api/trips/driver/${driverId}?limit=${limit}`),
+
+    /** Get trip history for the current employee */
+    getEmployeeTrips: (employeeId: number, limit = 50) =>
+        request<TripHistory[]>(`${API_BASE}/api/trips/employee/${employeeId}?limit=${limit}`),
+
+    /** Get detailed trip with passenger list */
+    getTripDetail: (tripId: number) =>
+        request<TripDetail>(`${API_BASE}/api/trips/${tripId}`),
 };

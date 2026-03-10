@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, SafeAreaView, Dimensions, Image, TouchableOpacity, ActivityIndicator, Animated, PanResponder, ScrollView, RefreshControl } from 'react-native';
+import { View, Text, SafeAreaView, Dimensions, Image, TouchableOpacity, ActivityIndicator, Animated, PanResponder, ScrollView, RefreshControl, Alert, Vibration } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import Button from '@/components/Button';
 import { api } from '@/services/api';
 import { AuthStore } from '@/services/AuthStore';
-import { LocationStore } from '@/services/LocationStore';
 import { BoardingStore, BoardingStatus } from '@/services/BoardingStore';
+import { SocketService, BoardingCheckPayload } from '@/services/SocketService';
 import { Route, Vehicle, StopNamesMap } from '@/services/types';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -27,11 +27,16 @@ export default function EmployeeLiveTracking() {
     const [walkingDuration, setWalkingDuration] = useState<number | null>(null);
     const [stopNames, setStopNames] = useState<StopNamesMap>({});
     const [refreshing, setRefreshing] = useState(false);
-    const [shuttleIndex, setShuttleIndex] = useState(0);
     const [locationInView, setLocationInView] = useState(false);
     const [driverLive, setDriverLive] = useState(false);
+    const [tripActive, setTripActive] = useState(false);
     const [boardingResponse, setBoardingResponse] = useState<BoardingStatus | null>(null);
     const [shuttleNearby, setShuttleNearby] = useState(false);
+    const [socketConnected, setSocketConnected] = useState(false);
+    const [driverLocation, setDriverLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+    const [currentStopIndex, setCurrentStopIndex] = useState(0);
+    const [driverName, setDriverName] = useState('Driver');
+    const [vehiclePlateFromSocket, setVehiclePlateFromSocket] = useState('');
 
     const sheetHeight = useRef(new Animated.Value(SHEET_MAX_HEIGHT)).current;
     const lastHeight = useRef(SHEET_MAX_HEIGHT);
@@ -78,6 +83,63 @@ export default function EmployeeLiveTracking() {
         loadData();
     }, []);
 
+    // Connect to Socket.IO and listen for real-time driver updates
+    useEffect(() => {
+        SocketService.connect();
+
+        const unsubConnection = SocketService.onConnectionChange((connected) => {
+            setSocketConnected(connected);
+        });
+
+        const unsubTripStarted = SocketService.onTripStarted((data) => {
+            setTripActive(true);
+            setDriverLive(true);
+            setDriverLocation({ latitude: data.latitude, longitude: data.longitude });
+            setCurrentStopIndex(data.currentStopIndex);
+            if (data.driverName) setDriverName(data.driverName);
+            if (data.vehiclePlate) setVehiclePlateFromSocket(data.vehiclePlate);
+        });
+
+        const unsubTripUpdate = SocketService.onTripUpdate((data) => {
+            setTripActive(data.tripActive);
+            setDriverLive(data.tripActive);
+            setDriverLocation({ latitude: data.latitude, longitude: data.longitude });
+            setCurrentStopIndex(data.currentStopIndex);
+            if (data.driverName) setDriverName(data.driverName);
+            if (data.vehiclePlate) setVehiclePlateFromSocket(data.vehiclePlate);
+        });
+
+        const unsubTripEnded = SocketService.onTripEnded(() => {
+            setTripActive(false);
+            setDriverLive(false);
+        });
+
+        const unsubBoardingCheck = SocketService.onBoardingCheckStarted((data: BoardingCheckPayload) => {
+            Vibration.vibrate([0, 400, 200, 400]);
+            Alert.alert(
+                'Yoklama Başladı',
+                `Sürücü "${data.stopName}" durağına ulaştı. Yoklama başladı!`,
+            );
+        });
+
+        return () => {
+            unsubConnection();
+            unsubTripStarted();
+            unsubTripUpdate();
+            unsubTripEnded();
+            unsubBoardingCheck();
+        };
+    }, []);
+
+    // Join route room once route is loaded
+    useEffect(() => {
+        if (!route) return;
+        SocketService.joinRoute(route.cluster_id, 'employee');
+        return () => {
+            SocketService.leaveRoute(route.cluster_id);
+        };
+    }, [route?.cluster_id]);
+
     async function loadData() {
         try {
             setLoading(true);
@@ -97,36 +159,36 @@ export default function EmployeeLiveTracking() {
                 });
             }
 
-            const [routes, vehicles] = await Promise.all([
-                api.getRoutes(),
-                api.getVehicles(),
+            // Fetch only the employee's own route (not all 30 routes)
+            const clusterId = authUser.clusterId;
+            const matchedRoute = clusterId
+                ? await api.getRoute(clusterId).catch(() => null)
+                : null;
+            setRoute(matchedRoute);
+
+            // Fetch stop names + walking route in parallel (non-blocking for loading)
+            const stopCoords = matchedRoute ? (matchedRoute.bus_stops || matchedRoute.stops) : [];
+            const hasWalk = authUser.pickupPoint && authUser.lat != null && authUser.lon != null;
+
+            const [names, walkData] = await Promise.all([
+                stopCoords.length > 0
+                    ? api.getStopNames(stopCoords).catch(() => ({}))
+                    : Promise.resolve({}),
+                hasWalk
+                    ? api.getWalkingRoute(
+                          authUser.lat!, authUser.lon!,
+                          authUser.pickupPoint![0], authUser.pickupPoint![1]
+                      ).catch(() => null)
+                    : Promise.resolve(null),
             ]);
 
-            const matchedRoute = routes.find(r => r.cluster_id === authUser.clusterId) ?? routes[0] ?? null;
-            setRoute(matchedRoute);
-            if (vehicles.length > 0) setVehicle(vehicles[0]);
-
-            // Fetch stop names
-            if (matchedRoute) {
-                try {
-                    const names = await api.getStopNames(matchedRoute.bus_stops || matchedRoute.stops);
-                    setStopNames(names);
-                } catch { }
-            }
-
-            // OSRM walking route from employee home to pickup stop
-            if (authUser.pickupPoint && authUser.lat != null && authUser.lon != null) {
-                try {
-                    const walkData = await api.getWalkingRoute(
-                        authUser.lat, authUser.lon,
-                        authUser.pickupPoint[0], authUser.pickupPoint[1]
-                    );
-                    setWalkingRoute(
-                        walkData.coordinates.map(c => ({ latitude: c[0], longitude: c[1] }))
-                    );
-                    setWalkingDistance(Math.round(walkData.distance_km * 1000));
-                    setWalkingDuration(Math.round(walkData.duration_min));
-                } catch { }
+            setStopNames(names);
+            if (walkData) {
+                setWalkingRoute(
+                    walkData.coordinates.map(c => ({ latitude: c[0], longitude: c[1] }))
+                );
+                setWalkingDistance(Math.round(walkData.distance_km * 1000));
+                setWalkingDuration(Math.round(walkData.duration_min));
             }
         } catch (err) {
             console.error('Failed to load tracking data:', err);
@@ -179,58 +241,32 @@ export default function EmployeeLiveTracking() {
         }
     }, []);
 
+    // Proximity check: is shuttle near the employee's assigned stop?
     useEffect(() => {
-        if (routeCoordinates.length === 0) return;
-        const interval = setInterval(() => {
-            // Check if the driver is actively sharing location
-            const driverLoc = LocationStore.get();
-            if (driverLoc && LocationStore.isActive()) {
-                // Use real driver position: map stop index to route coordinate index
-                setDriverLive(true);
-                const stopIdx = driverLoc.currentStopIndex;
-                if (route && route.stops[stopIdx]) {
-                    // Find nearest route coordinate to this stop
-                    const stop = route.stops[stopIdx];
-                    let nearestIdx = 0;
-                    let minDist = Infinity;
-                    for (let j = 0; j < routeCoordinates.length; j++) {
-                        const d = Math.abs(routeCoordinates[j].latitude - stop[0]) + Math.abs(routeCoordinates[j].longitude - stop[1]);
-                        if (d < minDist) { minDist = d; nearestIdx = j; }
-                    }
-                    setShuttleIndex(nearestIdx);
-                }
-            } else {
-                // Fall back to simulation
-                setDriverLive(false);
-                setShuttleIndex(prev => {
-                    if (prev >= routeCoordinates.length - 1) return prev;
-                    return prev + 1;
-                });
-            }
-
-            // Proximity check: is shuttle near the employee's assigned stop?
-            if (assignedStop && routeCoordinates.length > 0) {
-                const currentPos = routeCoordinates[shuttleIndex] || routeCoordinates[0];
-                const dist = getDistanceMeters(
-                    currentPos.latitude, currentPos.longitude,
-                    assignedStop.latitude, assignedStop.longitude
-                );
-                setShuttleNearby(dist < 300); // within 300m
-            }
-        }, 500);
-        return () => clearInterval(interval);
-    }, [routeCoordinates.length, route, assignedStop, shuttleIndex]);
+        if (!driverLocation || !assignedStop) return;
+        const dist = getDistanceMeters(
+            driverLocation.latitude, driverLocation.longitude,
+            assignedStop.latitude, assignedStop.longitude
+        );
+        setShuttleNearby(dist < 300); // within 300m
+    }, [driverLocation, assignedStop]);
 
     function handleBoardingConfirm() {
         const authUser = AuthStore.get();
-        if (!authUser) return;
+        if (!authUser || !route) return;
+        // Send via Socket.IO to notify driver in real-time
+        SocketService.sendBoardingUpdate(route.cluster_id, authUser.id, 'confirmed');
+        // Also update local store
         BoardingStore.confirm(authUser.id);
         setBoardingResponse('confirmed');
     }
 
     function handleBoardingDecline() {
         const authUser = AuthStore.get();
-        if (!authUser) return;
+        if (!authUser || !route) return;
+        // Send via Socket.IO to notify driver in real-time
+        SocketService.sendBoardingUpdate(route.cluster_id, authUser.id, 'declined');
+        // Also update local store
         BoardingStore.decline(authUser.id);
         setBoardingResponse('declined');
     }
@@ -256,7 +292,7 @@ export default function EmployeeLiveTracking() {
         );
     }
 
-    const shuttleLocation = routeCoordinates[shuttleIndex] || routeCoordinates[0];
+    const shuttleLocation = driverLocation || routeCoordinates[0];
 
     const lastStop = route.stops[route.stops.length - 1];
     const destinationLocation = {
@@ -273,16 +309,26 @@ export default function EmployeeLiveTracking() {
         longitudeDelta: 0.03,
     };
 
+    // Compute shuttle index from driver location for progress calculation
+    let shuttleIndex = 0;
+    if (driverLocation && routeCoordinates.length > 0) {
+        let minDist = Infinity;
+        for (let j = 0; j < routeCoordinates.length; j++) {
+            const d = Math.abs(routeCoordinates[j].latitude - driverLocation.latitude) + Math.abs(routeCoordinates[j].longitude - driverLocation.longitude);
+            if (d < minDist) { minDist = d; shuttleIndex = j; }
+        }
+    }
+
     // Dynamic ETA based on shuttle progress
-    const progress = routeCoordinates.length > 1 ? shuttleIndex / (routeCoordinates.length - 1) : 0;
-    const arrived = progress >= 1;
+    const progress = (tripActive && routeCoordinates.length > 1) ? shuttleIndex / (routeCoordinates.length - 1) : 0;
+    const arrived = tripActive && progress >= 1;
     const remainingFraction = 1 - progress;
     const distanceKm = (Number(route.distance_km) * remainingFraction).toFixed(1);
     const minutesAway = Math.max(1, Math.round(route.duration_min * remainingFraction));
 
-    const driverName = vehicle?.driver_name || 'Driver';
+    const displayDriverName = vehicle?.driver_name || driverName || 'Driver';
     const vehicleType = vehicle?.vehicle_type || 'Shuttle';
-    const vehiclePlate = vehicle?.plate_number || 'N/A';
+    const vehiclePlate = vehiclePlateFromSocket || vehicle?.plate_number || 'N/A';
 
     return (
         <View style={{ flex: 1 }}>
@@ -331,6 +377,8 @@ export default function EmployeeLiveTracking() {
                         lineDashPattern={[4, 6]}
                     />
                 ) : null}
+                {/* Shuttle marker — only show when driver trip is active */}
+                {tripActive && shuttleLocation && (
                 <Marker coordinate={shuttleLocation}>
                     <View style={{ alignItems: 'center' }}>
                         <View
@@ -375,6 +423,7 @@ export default function EmployeeLiveTracking() {
                         </View>
                     </View>
                 </Marker>
+                )}
                 {(route.bus_stops || route.stops).map((stop, i) => {
                     // Skip the assigned pickup stop — it gets its own flag marker
                     if (assignedStop && Math.abs(stop[0] - assignedStop.latitude) < 0.001 && Math.abs(stop[1] - assignedStop.longitude) < 0.001) {
@@ -459,6 +508,29 @@ export default function EmployeeLiveTracking() {
                 <Ionicons name="locate" size={22} color={locationInView ? Colors.primary : Colors.text} />
             </TouchableOpacity>
 
+            {/* Live status badge */}
+            {tripActive && (
+                <View
+                    style={{
+                        position: 'absolute',
+                        top: 60,
+                        left: 16,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: driverLive ? '#22C55E' : '#EF4444',
+                        paddingHorizontal: 10,
+                        paddingVertical: 6,
+                        borderRadius: 8,
+                        gap: 6,
+                    }}
+                >
+                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />
+                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>
+                        {driverLive ? 'LIVE TRACKING' : 'OFFLINE'}
+                    </Text>
+                </View>
+            )}
+
             {/* Draggable Bottom Sheet */}
             <Animated.View
                 style={{
@@ -514,7 +586,46 @@ export default function EmployeeLiveTracking() {
                     }
                 >
                     {/* Status */}
-                    {arrived ? (
+                    {!tripActive ? (
+                        <View style={{ alignItems: 'center', paddingVertical: 24, marginBottom: 12 }}>
+                            <View style={{
+                                width: 64, height: 64, borderRadius: 32,
+                                backgroundColor: Colors.background, alignItems: 'center', justifyContent: 'center',
+                                marginBottom: 16,
+                                borderWidth: 2,
+                                borderColor: Colors.border,
+                            }}>
+                                <Ionicons name="time-outline" size={32} color={Colors.textMuted} />
+                            </View>
+                            <Text style={{ fontSize: 22, fontWeight: '700', color: Colors.text }}>
+                                Waiting for Driver
+                            </Text>
+                            <Text style={{ fontSize: 14, color: Colors.textSecondary, marginTop: 6, textAlign: 'center', lineHeight: 20 }}>
+                                Your driver hasn't started the trip yet.{'\n'}You'll see real-time tracking once the trip begins.
+                            </Text>
+                            <View style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                marginTop: 16,
+                                backgroundColor: socketConnected ? '#F0FDF4' : '#FEF2F2',
+                                paddingHorizontal: 12,
+                                paddingVertical: 8,
+                                borderRadius: 8,
+                                gap: 6,
+                            }}>
+                                <View style={{
+                                    width: 8, height: 8, borderRadius: 4,
+                                    backgroundColor: socketConnected ? '#22C55E' : '#EF4444',
+                                }} />
+                                <Text style={{
+                                    fontSize: 13, fontWeight: '600',
+                                    color: socketConnected ? '#16A34A' : '#DC2626',
+                                }}>
+                                    {socketConnected ? 'Connected — waiting for trip to start' : 'Connecting to server...'}
+                                </Text>
+                            </View>
+                        </View>
+                    ) : arrived ? (
                         <View style={{ alignItems: 'center', paddingVertical: 16, marginBottom: 12 }}>
                             <View style={{
                                 width: 56, height: 56, borderRadius: 28,
@@ -701,7 +812,7 @@ export default function EmployeeLiveTracking() {
                         />
                         <View style={{ flex: 1 }}>
                             <Text style={{ fontSize: 18, fontWeight: '700', color: Colors.text }}>
-                                {driverName}
+                                {displayDriverName}
                             </Text>
                             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
                                 <Ionicons name="bus" size={14} color={Colors.textSecondary} />

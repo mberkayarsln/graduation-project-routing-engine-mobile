@@ -1,22 +1,37 @@
-import React from 'react';
-import { View, Text, SafeAreaView, ScrollView } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, SafeAreaView, ScrollView, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import Button from '@/components/Button';
+import { api } from '@/services/api';
+import { SaveTripPayload } from '@/services/types';
 
 export default function TripSummary() {
     const router = useRouter();
+    const [saving, setSaving] = useState(true);
+    const [saveError, setSaveError] = useState(false);
+    const savedRef = useRef(false);
+
     const params = useLocalSearchParams<{
         boarded: string;
+        absentCount: string;
         totalPassengers: string;
         totalStops: string;
         distanceKm: string;
         durationMin: string;
         routeId: string;
+        driverId: string;
+        driverName: string;
+        vehicleId: string;
+        vehiclePlate: string;
+        startedAt: string;
+        status: string;
+        passengersJson: string;
     }>();
 
     const boarded = parseInt(params.boarded || '0');
+    const absentCount = parseInt(params.absentCount || '0');
     const totalPassengers = parseInt(params.totalPassengers || '0');
     const totalStops = parseInt(params.totalStops || '0');
     const distanceKm = parseFloat(params.distanceKm || '0');
@@ -24,6 +39,38 @@ export default function TripSummary() {
     const routeId = params.routeId || '?';
 
     const boardingRate = totalPassengers > 0 ? Math.round((boarded / totalPassengers) * 100) : 0;
+
+    // Persist trip to backend on mount
+    useEffect(() => {
+        if (savedRef.current) return;
+        savedRef.current = true;
+
+        const payload: SaveTripPayload = {
+            routeId: parseInt(params.routeId || '0'),
+            driverId: parseInt(params.driverId || '0') || undefined,
+            driverName: params.driverName || undefined,
+            vehicleId: parseInt(params.vehicleId || '0') || undefined,
+            vehiclePlate: params.vehiclePlate || undefined,
+            distanceKm,
+            durationMin,
+            totalStops,
+            totalPassengers,
+            boardedCount: boarded,
+            absentCount,
+            startedAt: params.startedAt || new Date().toISOString(),
+            endedAt: new Date().toISOString(),
+            status: (params.status as 'completed' | 'terminated') || 'completed',
+            passengers: params.passengersJson ? JSON.parse(params.passengersJson) : [],
+        };
+
+        api.saveTrip(payload)
+            .then(() => setSaving(false))
+            .catch((err) => {
+                console.error('Failed to save trip:', err);
+                setSaveError(true);
+                setSaving(false);
+            });
+    }, []);
 
     const stats = [
         { icon: 'people', label: 'Passengers Boarded', value: `${boarded} / ${totalPassengers}`, color: Colors.primary },
@@ -59,9 +106,24 @@ export default function TripSummary() {
                 <Text style={{ fontSize: 26, fontWeight: '700', color: Colors.text, marginBottom: 4 }}>
                     Trip Complete!
                 </Text>
-                <Text style={{ fontSize: 15, color: Colors.textSecondary, marginBottom: 24 }}>
+                <Text style={{ fontSize: 15, color: Colors.textSecondary, marginBottom: 8 }}>
                     Route {routeId} · {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </Text>
+                {saving && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                        <ActivityIndicator size="small" color={Colors.textSecondary} />
+                        <Text style={{ marginLeft: 6, fontSize: 13, color: Colors.textSecondary }}>Saving trip...</Text>
+                    </View>
+                )}
+                {saveError && (
+                    <Text style={{ fontSize: 13, color: '#EF4444', marginBottom: 16 }}>Failed to save trip</Text>
+                )}
+                {!saving && !saveError && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                        <Ionicons name="cloud-done-outline" size={16} color={Colors.primary} />
+                        <Text style={{ marginLeft: 4, fontSize: 13, color: Colors.primary }}>Trip saved</Text>
+                    </View>
+                )}
 
                 {/* Boarding Rate Ring */}
                 <View
